@@ -1,0 +1,33 @@
+[Unit]
+Description=MAGI display — Proxmox cluster metrics collector
+Documentation=https://github.com/angusmaul/magi-display
+After=network-online.target magi-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+# Read as root by systemd BEFORE dropping to the service user, so the token
+# secret stays in a 0600 root:root file that user can never read off disk.
+EnvironmentFile=/etc/magi/magi.env
+Environment=MAGI_OUT=__MAGI_HOME__/display/data.json
+Environment=MAGI_INTERVAL=5
+Environment=MAGI_CLUSTER=MAGI
+ExecStart=/usr/bin/python3 __MAGI_HOME__/magi_collect.py
+Restart=always
+RestartSec=5
+
+# Modest hardening — this process only needs to read one HTTPS endpoint and
+# write one JSON file.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__MAGI_HOME__/display
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

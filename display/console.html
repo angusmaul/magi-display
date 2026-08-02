@@ -1,0 +1,964 @@
+<meta charset="utf-8">
+<title>MAGI SYSTEM · CONSOLE</title>
+<style>
+/* ── MAGI SYSTEM · console panel · 1080x1920 ────────────────────
+   Designed for a full portrait screen, fullscreen. Absorbs the Uptime Kuma
+   status page on 2026-08-02, so this is now the only window on the screen:
+   no second window frame, no gap at the bottom, and no second page being
+   scaled at 1.25x by Xft/DPI=120.
+
+   The 7 Kuma group monitors are rendered natively from the published
+   status-page API rather than embedded in an iframe. Kuma's own Custom CSS
+   box could have themed its page in place, but owning the markup means a
+   Kuma upgrade cannot silently break the wall display, and the same fetch
+   supplies PRIORITY, CHECKS and the incident count.
+
+   Palette is taken from the reference frames and is deliberately NOT the
+   rack panel's amber monochrome. Three roles, never mixed:
+     ORANGE  frame, structure, all label text and the data block
+     BLUE    the MAGI unit bodies themselves — fill intensity = load
+     GREEN   accent rules and the nominal verdict
+   Red is reserved: it appears only when something is actually wrong, so
+   a red screen is never decorative.                                      */
+:root{
+  --o:#ff6a00;          --o-hi:#ff9440;      --o-dim:#a34300;
+  --o-ghost:#4a2000;    --o-line:rgba(255,106,0,.38);
+  --blue:#1b4fd8;       --blue-hi:#3a6bff;   --blue-dark:#0a1738;
+  --blue-ink:#050b22;
+  --green:#00e567;      --green-dim:#0a7a3a;
+  --red:#ff1a1a;        --red-dim:#7a0000;
+  --bg:#000;
+  /* Canvas and inline-style colours can't read a CSS var directly, so the few
+     that are set from JS are declared here and looked up per render. That way
+     the critical palette below re-points them too, instead of leaving the
+     sparklines and unit bodies stubbornly blue on a red screen. */
+  --unit-live-rgb:27,79,216;   --trace-rgb:125,155,255;   --trace-hi:#dbe6ff;
+  --frame-rgb:255,106,0;       --hot-ink:#dbe6ff;         --hot-ink-dim:#93aaff;
+}
+
+/* ── critical palette ─────────────────────────────────────────────────
+   The takeover retires after TAKEOVER_MS, but the panel must still read as
+   an emergency from across the room afterwards — so every colour role
+   re-points at red, the same approach the rack panel uses for body.alert. Without
+   this the post-takeover panel would look nominal. */
+body.crit{
+  --o:var(--red);        --o-hi:#ff7b7b;      --o-dim:var(--red-dim);
+  --o-ghost:#4a0000;     --o-line:rgba(255,26,26,.38);
+  --blue:#8a0000;        --blue-hi:var(--red);--blue-dark:#1a0000;
+  --green:var(--red);
+  --unit-live-rgb:138,0,0;     --trace-rgb:255,90,90;     --trace-hi:#ffd6d6;
+  --frame-rgb:255,26,26;       --hot-ink:#ffd6d6;         --hot-ink-dim:#ff9b9b;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:#000;overflow:hidden}
+/* ── type ─────────────────────────────────────────────────────────────
+   Evangelion's own faces, per Fonts In Use: the NERV/MAGI interfaces are
+   set in **Matisse EB** (Fontworks' ultra-bold Mincho — the single most
+   recognisable thing about Eva's typography) with **Eurostile** on the
+   signage and UI elements, plus Helvetica on the later films. Both Matisse
+   and Eurostile are commercial.
+
+   The CJK entry is the important one and costs nothing: Noto Serif CJK JP
+   Black is a heavy Mincho already installed on this box, and it stands in
+   for Matisse EB. It sits AFTER the Latin faces on purpose — per-character
+   fallback means Latin resolves earlier and only the kana/kanji land here,
+   so "稼 働 · B" gets a Mincho 稼働 and a Latin B.
+
+   `Eurostile` is listed first so that if a licensed copy is ever installed
+   it takes over with no code change. */
+body{cursor:none;
+  font-family:"Eurostile","Michroma","DejaVu Sans Condensed",
+              "Liberation Sans Narrow","Nimbus Sans","DejaVu Sans",
+              "Noto Serif CJK JP Black","Noto Serif CJK JP",sans-serif;
+  -webkit-font-smoothing:none}
+.mono{font-family:"DejaVu Sans Mono",Consolas,
+      "Noto Serif CJK JP Black","Noto Serif CJK JP",monospace}
+
+/* Michroma — OFL stand-in for Eurostile Bold Extended, the wide square caps
+   that carry the MAGI look. Two consequences drive every size below:
+     1. It has ONE weight, so display text is left at font-weight 400. A
+        synthetic bold on a face this wide smears the verticals.
+     2. It runs far wider than the condensed fallback, so every element set
+        in it needed its size cut and its tracking reduced.
+   `Eurostile` stays first: a licensed copy would simply take over. */
+.display{font-family:"Eurostile","Michroma","DejaVu Sans Condensed",
+         "Liberation Sans Narrow","DejaVu Sans",
+         "Noto Serif CJK JP Black","Noto Serif CJK JP",sans-serif;
+  font-weight:400}
+
+/* Fixed stage, scaled to whatever viewport it lands in. Same trick as the
+   rack panel: design at one size, let CSS fit it.
+   Centred by absolute positioning rather than a grid, because a scaled
+   element keeps its *unscaled* layout box — at 1080px wide inside a
+   narrower viewport a centring grid overflows to the right instead of
+   centring, which silently clips the clock and the verdict badge. */
+#stage{position:absolute;left:50%;top:50%;width:1080px;height:1920px;
+  background:var(--bg);transform-origin:center;overflow:hidden}
+
+/* ── ambient layers ── */
+#stage::before{                       /* grid wash */
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:5;
+  background:
+    repeating-linear-gradient(90deg,transparent 0 59px,rgba(255,106,0,.035) 59px 60px),
+    repeating-linear-gradient(0deg,transparent 0 59px,rgba(255,106,0,.035) 59px 60px);
+}
+#stage::after{                        /* scanlines + vignette + rare flicker */
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:80;
+  background:
+    repeating-linear-gradient(0deg,rgba(0,0,0,.34) 0 1px,transparent 1px 3px),
+    radial-gradient(ellipse 92% 118% at 50% 50%,transparent 58%,rgba(0,0,0,.72) 100%);
+  animation:flicker 7s infinite steps(1)
+}
+@keyframes flicker{0%,97%{opacity:1}97.5%{opacity:.88}98%{opacity:1}98.6%{opacity:.93}99%{opacity:1}}
+
+#sweep{position:absolute;top:0;left:-30%;width:20%;height:100%;z-index:70;
+  pointer-events:none;
+  background:linear-gradient(90deg,transparent,rgba(255,106,0,.05),transparent);
+  animation:sweep 11s linear infinite}
+@keyframes sweep{to{left:120%}}
+
+/* ── header ── */
+header{position:absolute;top:0;left:0;right:0;height:58px;z-index:20;
+  display:flex;align-items:center;gap:16px;padding:0 20px;
+  border-bottom:2px solid var(--o-line)}
+.brand{font-size:19px;letter-spacing:.22em;color:var(--o)}
+.brand small{font-size:10px;letter-spacing:.24em;color:var(--o-dim);margin-left:10px}
+.hrule{flex:1;height:2px;background:linear-gradient(90deg,var(--o-line),transparent)}
+.hstat{font-size:11px;letter-spacing:.2em;color:var(--o-dim)}
+.hstat b{color:var(--o);font-weight:400}
+#clock{font-size:19px;color:var(--o);letter-spacing:.1em;min-width:104px;
+  text-align:right;font-variant-numeric:tabular-nums}
+
+/* ── the schematic (hero) ── */
+#diagram{position:absolute;top:58px;left:0;right:0;height:600px;z-index:20}
+#diagram svg{display:block;width:100%;height:100%}
+
+/* SVG text is styled here so the whole thing themes from the CSS vars */
+.svg-frame{fill:none;stroke:var(--o);stroke-width:3}
+/* Keystone and units carry the SAME stroke width — the shared edges between
+   them are what draw the connecting bands, so any mismatch shows up as a
+   band that changes thickness halfway along. */
+.svg-keystone{fill:none;stroke:var(--o);stroke-width:7;stroke-linejoin:miter}
+.unit-shape{stroke:var(--o);stroke-width:7;stroke-linejoin:miter;
+  transition:fill .9s cubic-bezier(.22,1,.36,1)}
+/* 30px, not 34: "BALTHASAR·2" is the longest label and its unit is the
+   narrowest at label height. At 34 it cleared the box by 4px, which the 7px
+   stroke then ate — the text touched the frame. */
+.unit-label{font-size:23px;letter-spacing:.02em;
+  text-anchor:middle;dominant-baseline:middle}
+.unit-sub{font-size:13px;letter-spacing:.26em;text-anchor:middle;
+  dominant-baseline:middle}
+.core-label{font-size:29px;letter-spacing:.02em;fill:var(--o);
+  text-anchor:middle;dominant-baseline:middle}
+.core-sub{font-size:13px;letter-spacing:.4em;fill:var(--o-dim);
+  text-anchor:middle;dominant-baseline:middle}
+.hdr-word{font-size:34px;letter-spacing:.02em;fill:var(--o)}
+.accent{stroke:var(--green);stroke-width:4}
+
+/* Unit fill states. `live` units carry a blue body whose brightness tracks
+   CPU load, set inline — motion that is real rather than animated. */
+.u-void  {fill:#050a18;stroke:var(--o-ghost)}
+.u-down  {fill:#1a0000;stroke:var(--red)}
+.u-live  {fill:var(--blue-dark)}
+.unit-label.t-void{fill:var(--o-ghost)}
+.unit-sub.t-void  {fill:var(--o-ghost)}
+.unit-label.t-down{fill:var(--red)}
+.unit-sub.t-down  {fill:var(--red-dim)}
+.unit-label.t-live{fill:var(--blue-hi)}
+.unit-sub.t-live  {fill:var(--blue-hi);opacity:.7}
+/* the hot unit — highest load — goes solid, as the reference does */
+.u-hot{fill:var(--blue)}
+.unit-label.t-hot{fill:var(--hot-ink)}
+.unit-sub.t-hot{fill:var(--hot-ink-dim)}
+
+/* ── data block (left inset, inside the schematic) ── */
+#datablock{position:absolute;left:44px;top:150px;z-index:30;
+  font-size:15px;letter-spacing:.1em;line-height:1.62;color:var(--o-dim)}
+#datablock .code{font-size:31px;letter-spacing:.06em;color:var(--o);
+  margin-bottom:6px;font-weight:700}
+#datablock .code b{font-weight:700;font-variant-numeric:tabular-nums}
+/* 132px, not 112: "EXTENTION :" is the longest label and at 15px DejaVu Sans
+   Mono with .1em tracking it measures ~116px, so it wrapped inside its own
+   inline-block and split the row in two. nowrap makes that failure impossible
+   rather than merely unlikely. */
+#datablock i{font-style:normal;display:inline-block;width:132px;white-space:nowrap}
+#datablock b{color:var(--o-hi);font-weight:400;font-variant-numeric:tabular-nums}
+
+/* ── verdict badge (right inset) ── */
+#verdict{position:absolute;right:44px;top:172px;z-index:30;
+  border:3px solid var(--green);color:var(--green);
+  font-size:19px;letter-spacing:.1em;padding:9px 20px}
+#verdict.warn{border-color:var(--o);color:var(--o);
+  animation:blip 1.4s ease-in-out infinite}
+#verdict.crit{border-color:var(--red);color:var(--red);
+  animation:blip .7s steps(1) infinite}
+@keyframes blip{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* ── vitals strip ── */
+#vitals{position:absolute;top:658px;left:0;right:0;height:396px;z-index:20;
+  display:grid;grid-template-columns:repeat(3,1fr);gap:2px;
+  background:var(--o-line);border-top:2px solid var(--o-line)}
+.v{position:relative;background:var(--bg);padding:14px 18px 12px;
+  display:flex;flex-direction:column;overflow:hidden}
+.v::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:var(--blue-hi);opacity:.85}
+.v.dark::before{background:var(--o-ghost)}
+.v.down::before{background:var(--red)}
+
+.vhead{display:flex;align-items:baseline;gap:9px}
+.vname{font-size:21px;font-weight:700;letter-spacing:.15em;color:var(--o)}
+.vidx{font-size:13px;color:var(--o-dim)}
+.vjp{font-size:11px;color:var(--o-dim);letter-spacing:.34em;margin:3px 0 9px}
+.v.dark .vname,.v.dark .vidx,.v.dark .vjp{color:var(--o-ghost)}
+
+.vstat{display:inline-flex;align-items:center;gap:7px;align-self:flex-start;
+  font-size:11px;letter-spacing:.2em;padding:3px 10px;margin-bottom:10px;
+  border:1px solid currentColor;color:var(--green)}
+.vstat .dot{width:6px;height:6px;background:currentColor;border-radius:50%;
+  animation:blip 1.8s ease-in-out infinite}
+.v.dark .vstat{color:var(--o-ghost)}
+.v.down .vstat{color:var(--red)}
+
+.primary{display:flex;align-items:flex-end;gap:11px;margin-bottom:2px}
+.big{font-size:70px;line-height:.82;font-weight:700;color:var(--o-hi);
+  font-variant-numeric:tabular-nums;text-shadow:0 0 24px rgba(255,106,0,.45)}
+.big .pct{font-size:23px;color:var(--o-dim);margin-left:3px}
+.plabel{font-size:10px;letter-spacing:.26em;color:var(--o-dim);padding-bottom:9px}
+.v.dark .big{color:var(--o-ghost);text-shadow:none;font-size:48px}
+.v.dark .big .pct{display:none}
+
+.sparkwrap{position:relative;height:96px;margin:8px 0 4px;
+  border-left:1px solid var(--o-line);border-bottom:1px solid var(--o-line)}
+.sparkwrap canvas{display:block;width:100%;height:100%}
+.spark-nosig{position:absolute;inset:0;display:none;place-items:center;
+  font-size:11px;letter-spacing:.3em;color:var(--o-ghost)}
+.v.dark .sparkwrap canvas{display:none}
+.v.dark .spark-nosig{display:grid;animation:blip 3.4s ease-in-out infinite}
+
+.gauges{margin-top:10px;display:flex;flex-direction:column;gap:9px}
+.g{display:grid;grid-template-columns:42px 1fr 50px;align-items:center;gap:9px;
+  font-size:10px;letter-spacing:.14em;color:var(--o-dim)}
+.track{position:relative;height:9px;border:1px solid var(--o-line);overflow:hidden}
+.fill{position:absolute;inset:0;width:0%;background:var(--o);opacity:.85;
+  transition:width .85s cubic-bezier(.22,1,.36,1)}
+.track::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(90deg,transparent 0 6px,#000 6px 7px)}
+.gval{text-align:right;color:var(--o);font-variant-numeric:tabular-nums}
+.v.dark .fill{background:var(--o-ghost)}
+.v.dark .gval{color:var(--o-ghost)}
+
+.meta{margin-top:auto;display:flex;justify-content:space-between;
+  font-size:10px;letter-spacing:.12em;color:var(--o-dim);
+  border-top:1px solid var(--o-line);padding-top:8px}
+.meta b{color:var(--o);font-weight:400}
+.v.dark .meta b{color:var(--o-ghost)}
+
+/* ── service status (the absorbed Kuma board) ─────────────────────────
+   Seven group monitors. Deliberately NOT a scrolling list: at seven rows it
+   fits, and a wall panel that needs scrolling to show its own alarms is a
+   wall panel that hides them. */
+#services{position:absolute;top:1054px;left:0;right:0;height:820px;z-index:20;
+  border-top:2px solid var(--o-line);display:flex;flex-direction:column;
+  padding:0 20px}
+.svc-head{height:54px;flex:none;display:flex;align-items:center;gap:14px;
+  border-bottom:1px solid var(--o-line)}
+.svc-title{font-size:15px;letter-spacing:.14em;color:var(--o)}
+.svc-jp{font-size:11px;letter-spacing:.34em;color:var(--o-dim)}
+.svc-rule{flex:1;height:1px;background:linear-gradient(90deg,var(--o-line),transparent)}
+.svc-count{font-size:14px;letter-spacing:.16em;color:var(--o-dim);
+  font-variant-numeric:tabular-nums}
+.svc-count b{color:var(--o);font-weight:400}
+
+#svc-list{flex:1;display:flex;flex-direction:column}
+.svc{flex:1;display:grid;align-items:center;gap:16px;
+  grid-template-columns:16px 300px 1fr 92px 78px;
+  border-bottom:1px solid rgba(255,106,0,.14)}
+.svc:last-child{border-bottom:0}
+
+.svc-dot{width:16px;height:16px;background:var(--green);
+  box-shadow:0 0 12px rgba(0,229,103,.55)}
+.svc.down .svc-dot{background:var(--red);box-shadow:0 0 14px rgba(255,26,26,.7);
+  animation:blip .8s steps(1) infinite}
+
+.svc-name{font-size:21px;letter-spacing:.1em;color:var(--o);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.svc.down .svc-name{color:var(--red)}
+.svc-tier{font-size:10px;letter-spacing:.2em;color:var(--o-dim);margin-top:3px}
+
+/* Heartbeat strip — one bar per beat, oldest left. Uniform height with the
+   colour carrying the state: bar HEIGHT scaled by ping would be noise at
+   2-13 ms and would read as information it isn't. */
+.svc-beats{display:flex;align-items:flex-end;gap:2px;height:46px}
+.svc-beats i{flex:1;height:100%;background:var(--green);opacity:.62}
+.svc-beats i.d{background:var(--red);opacity:1}
+.svc-beats i.n{background:var(--o-ghost);opacity:.5}
+
+.svc-up{font-size:19px;text-align:right;color:var(--o-hi);
+  font-variant-numeric:tabular-nums}
+.svc-up small{display:block;font-size:9px;letter-spacing:.2em;color:var(--o-dim)}
+.svc-ping{font-size:19px;text-align:right;color:var(--o-dim);
+  font-variant-numeric:tabular-nums}
+.svc-ping small{display:block;font-size:9px;letter-spacing:.2em;color:var(--o-dim)}
+.svc.down .svc-up,.svc.down .svc-ping{color:var(--red)}
+
+/* Kuma unreachable. An empty list would render as seven silent green rows, so
+   this section states plainly that it cannot see, exactly like LINK LOST. */
+#svc-dead{flex:1;display:none;place-items:center;text-align:center;
+  color:var(--red);font-size:26px;font-weight:700;letter-spacing:.24em}
+#svc-dead small{display:block;font-size:12px;letter-spacing:.2em;
+  color:var(--red-dim);margin-top:10px;font-weight:400}
+#services.dead #svc-list{display:none}
+#services.dead #svc-dead{display:grid;animation:blip 1.6s ease-in-out infinite}
+
+/* ── footer ticker ── */
+/* The ticker runs full width. There used to be a second `CODE:` here beside
+   it, which meant two fields on one screen both labelled CODE and showing
+   different numbers — the fastest way to make a readout untrustworthy. */
+footer{position:absolute;bottom:0;left:0;right:0;height:46px;z-index:20;
+  border-top:2px solid var(--o-line);display:flex;align-items:center;
+  padding:0 20px;overflow:hidden}
+.tickwrap{flex:1;overflow:hidden;
+  mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent)}
+#tick{display:inline-block;white-space:nowrap;font-size:11px;letter-spacing:.16em;
+  color:var(--o-dim);animation:roll 52s linear infinite}
+#tick span{color:var(--o)}
+@keyframes roll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+
+/* ── EMERGENCY takeover ──────────────────────────────────────────────
+   Only ever shown when something is genuinely wrong, so the red screen
+   carries information rather than atmosphere. */
+#emerg{position:absolute;inset:0;z-index:75;background:#000;display:none;
+  color:var(--red);animation:alarmbg 1.1s steps(1) infinite}
+/* Shown while `takeover` is set — the first 30 s of a critical episode, not
+   its whole duration. `crit` outlives it and keeps the palette red. */
+body.takeover #emerg{display:block}
+@keyframes alarmbg{0%,100%{background:#000}50%{background:#170000}}
+#emerg svg{position:absolute;inset:0;width:100%;height:100%}
+.e-corner{position:absolute;font-size:15px;letter-spacing:.16em;line-height:1.5}
+.e-corner small{display:block;font-size:10px;color:var(--red-dim);letter-spacing:.2em}
+.e-corner b{font-size:36px;font-weight:700;font-variant-numeric:tabular-nums;
+  letter-spacing:.04em}
+.e-tl{top:26px;left:26px} .e-tr{top:26px;right:26px;text-align:right}
+.e-bl{bottom:26px;left:26px} .e-br{bottom:26px;right:26px;text-align:right}
+.e-ring{fill:none;stroke:rgba(255,26,26,.3);stroke-width:2}
+.e-tri{fill:none;stroke:var(--red);stroke-width:5}
+.e-spin{transform-origin:540px 960px;animation:spin 26s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.e-word{font-size:52px;font-weight:700;letter-spacing:.14em;fill:var(--red);
+  text-anchor:middle}
+
+/* ── boot ── */
+#boot{position:absolute;inset:0;z-index:90;background:#000;color:var(--o);
+  font-size:14px;letter-spacing:.18em;padding:26px 30px;line-height:2;
+  animation:bootout .35s ease-in forwards 2.1s}
+@keyframes bootout{to{opacity:0;visibility:hidden}}
+#boot i{font-style:normal;color:var(--o-dim)}
+</style>
+
+<div id="stage">
+  <div id="sweep"></div>
+
+  <div id="boot" class="mono">
+    MAGI SYSTEM<br>
+    <i>SELF DIAGNOSTIC .....</i> OK<br>
+    <i>NODE DISCOVERY .....</i> <span id="bootnodes">SCANNING</span><br>
+    <i>LINK ESTABLISHED</i>
+  </div>
+
+  <header>
+    <div class="brand display">MAGI<small>SYSTEM</small></div>
+    <div class="hrule"></div>
+    <div class="hstat">QUORUM <b id="hquorum">—</b></div>
+    <div class="hstat">UNITS <b id="honline">0</b>/3</div>
+    <div id="clock">--:--:--</div>
+  </header>
+
+  <div id="diagram">
+    <svg viewBox="0 0 1080 600" preserveAspectRatio="xMidYMid meet">
+      <!-- outer frame -->
+      <rect class="svg-frame" x="18" y="14" width="1044" height="572"/>
+
+      <!-- header words + green accent rules, as in the reference -->
+      <!-- ONE centred rule group, spanning BALTHASAR's bottom edge (440-640) so
+           it reads as aligned to the unit beneath it rather than floating.
+           The words are centred in the halves either side — anchors 242 and
+           838 mirror exactly about x=540.
+           Vertical: the rules sit at 46/60/74 with stroke-width 4, so the group
+           spans y 44-76; the text baseline is placed so its cap-top lands on 44
+           and its baseline on 76. Cap height is font-dependent, so this was
+           trimmed against a screenshot of the real box, not assumed. -->
+      <g class="accent">
+        <line x1="440" y1="46" x2="640" y2="46"/>
+        <line x1="440" y1="60" x2="640" y2="60"/>
+        <line x1="440" y1="74" x2="640" y2="74"/>
+      </g>
+      <text class="hdr-word display" x="242" y="72" text-anchor="middle">CURRENT</text>
+      <text class="hdr-word display" x="838" y="72" text-anchor="middle">OPERATIONS</text>
+
+      <!-- ── the trilobe ────────────────────────────────────────────────
+           The four shapes TILE: every boundary between two of them is one
+           shared edge, stroked by both, which renders as a single solid
+           orange band. An earlier version drew the connectors as separate
+           centre lines, which floated in the gap and never reached the
+           lower boxes — the reference has no free-floating rules at all.
+
+           Symmetric about x=540 (440+640, 374+706, 46+1034 all = 1080) and
+           every chamfer is a true 45°, so the bands read as one system. -->
+
+      <!-- The connecting bands branch from the MIDPOINT of each chamfer, and
+           the chamfer carries on past the branch — measured off the reference
+           frame, where BALTHASAR's chamfer midpoints sit at (527,400)/(751,400)
+           and the bands leave at (525,397)/(753,397). Joining corner-to-corner
+           instead, as an earlier version did, gives a subtly wrong silhouette:
+           the junctions read as folds rather than as a branching bus.
+
+           Chamfer midpoints on this canvas:
+             BALTHASAR  (400,270)-(460,330) → 430,300   (620,330)-(680,270) → 650,300
+             CASPER     (290,380)-(350,440) → 320,410
+             MELCHIOR   (790,380)-(730,440) → 760,410
+           Both bands are true 45° and the whole figure mirrors about x=540. -->
+
+      <!-- Central keystone. Drawing this one shape produces the two diagonal
+           bands AND every shared edge, because its remaining sides lie exactly
+           on the units' chamfers and inner edges. -->
+      <polygon class="svg-keystone"
+        points="430,300 460,330 620,330 650,300 760,410 730,440 730,500 350,500 350,440 320,410"/>
+
+      <!-- BALTHASAR · 2 — top centre -->
+      <polygon id="s-balthasar" class="unit-shape u-void"
+        points="400,120 680,120 680,270 620,330 460,330 400,270"/>
+      <text id="t-balthasar" class="unit-label display t-void" x="540" y="196">BALTHASAR·2</text>
+      <text id="j-balthasar" class="unit-sub t-void"  x="540" y="232">母 親</text>
+
+      <text class="core-label display" x="540" y="404">MAGI·01</text>
+      <text class="core-sub"   x="540" y="437">ORIGINAL</text>
+
+      <!-- CASPER · 3 — bottom left, top-right corner chamfered into the core -->
+      <polygon id="s-casper" class="unit-shape u-void"
+        points="46,380 290,380 350,440 350,552 46,552"/>
+      <text id="t-casper" class="unit-label display t-void" x="198" y="458">CASPER·3</text>
+      <text id="j-casper" class="unit-sub t-void"  x="198" y="494">女 性</text>
+
+      <!-- MELCHIOR · 1 — bottom right, mirrored -->
+      <polygon id="s-melchior" class="unit-shape u-void"
+        points="790,380 1034,380 1034,552 730,552 730,440"/>
+      <text id="t-melchior" class="unit-label display t-void" x="882" y="458">MELCHIOR·1</text>
+      <text id="j-melchior" class="unit-sub t-void"  x="882" y="494">科学者</text>
+    </svg>
+
+    <!-- Every field below is live. Nothing here is set dressing. -->
+    <div id="datablock" class="mono">
+      <div class="code">CODE : <b id="d-code">000</b></div>
+      <div><i>FILE :</i><b id="d-file">—</b></div>
+      <div><i>EXTENTION :</i><b id="d-ext">0000</b></div>
+      <div><i>EX_MODE :</i><b id="d-mode">—</b></div>
+      <div><i>PRIORITY :</i><b id="d-prio">—</b></div>
+    </div>
+
+    <div id="verdict" class="display">NOMINAL</div>
+  </div>
+
+  <div id="vitals"></div>
+
+  <section id="services">
+    <div class="svc-head">
+      <div class="svc-title display">SERVICE STATUS</div>
+      <div class="svc-jp">監 視</div>
+      <div class="svc-rule"></div>
+      <div class="svc-count">CHECKS <b id="svc-count">—</b></div>
+    </div>
+    <div id="svc-list"></div>
+    <div id="svc-dead">KUMA LINK LOST<small id="svc-err">STATUS PAGE UNREACHABLE</small></div>
+  </section>
+
+  <footer>
+    <div class="tickwrap"><div id="tick" class="mono"></div></div>
+  </footer>
+
+  <!-- EMERGENCY takeover -->
+  <div id="emerg" class="mono">
+    <svg viewBox="0 0 1080 1920" preserveAspectRatio="xMidYMid slice">
+      <g>
+        <circle class="e-ring" cx="540" cy="960" r="190"/>
+        <circle class="e-ring" cx="540" cy="960" r="300"/>
+        <circle class="e-ring" cx="540" cy="960" r="410"/>
+        <circle class="e-ring" cx="540" cy="960" r="520"/>
+        <circle class="e-ring" cx="540" cy="960" r="630"/>
+        <circle class="e-ring" cx="540" cy="960" r="740"/>
+        <circle class="e-ring" cx="540" cy="960" r="850"/>
+      </g>
+      <g class="e-spin">
+        <polygon class="e-tri" points="540,608 796,1056 284,1056"/>
+        <polygon class="e-tri" points="540,1312 284,864 796,864"/>
+      </g>
+      <text class="e-word" x="540" y="978" id="e-word">EMERGENCY</text>
+    </svg>
+    <div class="e-corner e-tl"><small>AFFECTED UNIT</small><span id="e-unit">—</span></div>
+    <div class="e-corner e-tr"><small>FAILING CHECKS</small><b id="e-count">0</b></div>
+    <div class="e-corner e-bl"><small>QUORUM STATE</small><span id="e-quorum">—</span></div>
+    <div class="e-corner e-br"><small>TIME SINCE RAISED</small><b id="e-since">00:00:00</b></div>
+  </div>
+</div>
+
+<script>
+/* ── unit definitions ─────────────────────────────────────────────────
+   `node` matches the Proxmox node name in /cluster/resources, exactly as
+   the rack panel does. A unit with no matching node renders void, so
+   casper lights up by itself when it joins. Order is deliberate: the
+   schematic places BALTHASAR top, CASPER bottom-left, MELCHIOR
+   bottom-right, matching the reference frames. */
+const UNITS = [
+  {node:"melchior",  name:"MELCHIOR",  idx:"·1", jp:"科学者"},
+  {node:"balthasar", name:"BALTHASAR", idx:"·2", jp:"母 親"},
+  {node:"casper",    name:"CASPER",    idx:"·3", jp:"女 性"},
+];
+
+const $  = s => document.querySelector(s);
+const pad = n => String(n).padStart(2,"0");
+const pad3 = n => String(n).padStart(3,"0");
+
+function fmtUptime(sec){
+  if(!sec) return "—";
+  const d=Math.floor(sec/86400), h=Math.floor(sec%86400/3600), m=Math.floor(sec%3600/60);
+  return d>0 ? `${d}d ${pad(h)}h` : `${h}h ${pad(m)}m`;
+}
+function fmtHMS(sec){
+  sec=Math.max(0,Math.floor(sec));
+  return `${pad(Math.floor(sec/3600))}:${pad(Math.floor(sec%3600/60))}:${pad(sec%60)}`;
+}
+
+/* build the vitals strip once */
+$("#vitals").innerHTML = UNITS.map(u=>`
+  <section class="v dark" id="v-${u.node}">
+    <div class="vhead"><div class="vname">${u.name}</div><div class="vidx">${u.idx}</div></div>
+    <div class="vjp">${u.jp}</div>
+    <div class="vstat"><span class="dot"></span><span class="stxt">未配備</span></div>
+    <div class="primary">
+      <div class="big"><span class="cpu">--</span><span class="pct">%</span></div>
+      <div class="plabel">CPU LOAD</div>
+    </div>
+    <div class="sparkwrap">
+      <canvas class="spark" width="440" height="200"></canvas>
+      <div class="spark-nosig">NO SIGNAL</div>
+    </div>
+    <div class="gauges">
+      <div class="g"><span>MEM</span><div class="track"><div class="fill f-mem"></div></div><span class="gval v-mem">--</span></div>
+      <div class="g"><span>DISK</span><div class="track"><div class="fill f-disk"></div></div><span class="gval v-disk">--</span></div>
+      <div class="g"><span>SWAP</span><div class="track"><div class="fill f-third"></div></div><span class="gval v-third">--</span></div>
+    </div>
+    <div class="meta">
+      <span>UPTIME <b class="v-up">—</b></span>
+      <span>LOAD <b class="v-load">—</b></span>
+    </div>
+  </section>`).join("");
+
+/* ── CPU history traces ── carried over unchanged from the rack panel,
+   which has been running this code since 2026-07-31. Real samples at the
+   poll interval, autoscaled so an idle node isn't a flat line on the floor. */
+const HIST = {}, HIST_MAX = 110;
+
+/* Colours that JS has to write directly (canvas strokes, the load-scaled unit
+   fill) are read back out of CSS once per render, so the critical palette
+   swaps them along with everything else. */
+let PAL = {};
+function readPalette(){
+  const cs = getComputedStyle(document.body);
+  const v = (n,d) => (cs.getPropertyValue(n).trim() || d);
+  PAL = {
+    live:    v("--unit-live-rgb","27,79,216"),
+    trace:   v("--trace-rgb","125,155,255"),
+    traceHi: v("--trace-hi","#dbe6ff"),
+    frame:   v("--frame-rgb","255,106,0"),
+  };
+}
+readPalette();
+
+function drawSpark(el, node){
+  const c = el.querySelector(".spark"), h = HIST[node];
+  if(!c || !h || !h.length) return;
+  const ctx = c.getContext("2d"), W = c.width, H = c.height;
+  ctx.clearRect(0,0,W,H);
+
+  const peak = Math.max(...h, 1);
+  const ceil = Math.min(100, Math.max(10, Math.ceil(peak*1.35/5)*5));
+
+  ctx.strokeStyle = `rgba(${PAL.frame},.13)`; ctx.lineWidth = 1;
+  [0.5,1].forEach(f=>{
+    const y = H - f*H + (f===1?1:0);
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+  });
+  ctx.fillStyle = `rgba(${PAL.frame},.45)`;
+  ctx.font = "18px 'DejaVu Sans Mono',monospace";
+  ctx.fillText(ceil+"%", 5, 20);
+
+  const step = W / (HIST_MAX - 1);
+  const pt = i => [i*step, H - Math.max(0,Math.min(ceil,h[i]))/ceil * H];
+
+  ctx.beginPath(); ctx.moveTo(0,H);
+  h.forEach((_,i)=>{ const [x,y]=pt(i); ctx.lineTo(x,y); });
+  ctx.lineTo((h.length-1)*step, H); ctx.closePath();
+  const grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,`rgba(${PAL.trace},.30)`);
+  grad.addColorStop(1,`rgba(${PAL.trace},.02)`);
+  ctx.fillStyle = grad; ctx.fill();
+
+  ctx.beginPath();
+  h.forEach((_,i)=>{ const [x,y]=pt(i); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.strokeStyle = `rgb(${PAL.trace})`; ctx.lineWidth = 2.5; ctx.stroke();
+
+  const [lx,ly] = pt(h.length-1);
+  ctx.fillStyle = PAL.traceHi;
+  ctx.fillRect(lx-3, ly-3, 6, 6);
+  ctx.strokeStyle = `rgba(${PAL.trace},.45)`;
+  ctx.beginPath(); ctx.moveTo(lx,0); ctx.lineTo(lx,H); ctx.stroke();
+}
+
+/* ── schematic state ─────────────────────────────────────────────────
+   The reference varies which lobe is solid blue frame to frame. Here that
+   is load-driven: the busiest online node goes solid, the rest sit on the
+   dark body. It reads as the MAGI "conferring" and it is real telemetry. */
+function paintUnit(node, state, cpu){
+  const shape = document.getElementById("s-"+node);
+  const label = document.getElementById("t-"+node);
+  const sub   = document.getElementById("j-"+node);
+  shape.setAttribute("class", "unit-shape u-"+state);
+  /* `display` must be re-applied here: setAttribute replaces the whole class
+     list, so omitting it would silently drop the unit labels back to the
+     fallback face on the first render. */
+  label.setAttribute("class", "unit-label display t-"+state);
+  sub  .setAttribute("class", "unit-sub t-"+state);
+  /* brightness of the body tracks load for live units */
+  shape.style.fill = (state==="live")
+    ? `rgba(${PAL.live},${(0.20 + Math.min(cpu,100)/100*0.55).toFixed(3)})`
+    : "";
+}
+
+/* ── takeover timing ──────────────────────────────────────────────────
+   The full-screen red takeover runs for TAKEOVER_MS and then retires to the
+   normal panel in the critical palette. Rationale: the takeover is what
+   catches the eye, but it shows only four corner fields — so leaving it up
+   forever means that at the moment things are worst you lose the schematic,
+   the vitals and the per-unit detail. Nobody sees the drama at 03:00; whoever
+   walks up at 08:00 needs to know WHAT broke. */
+const TAKEOVER_MS = 30000;
+let alertSince = null, takeoverUntil = 0, faultKey = null;
+
+function updateTakeover(){
+  document.body.classList.toggle("takeover",
+    document.body.classList.contains("crit") && Date.now() < takeoverUntil);
+}
+
+/* ── which unit is promoted to solid ──────────────────────────────────
+   Highest CPU among ONLINE units — but with hysteresis. At idle the nodes
+   sit within a point or two of each other, so a plain "highest wins" flips
+   the solid lobe on almost every 5 s poll: motion that looks like
+   information and carries none. A challenger must beat the incumbent by
+   HOT_MARGIN points to take it, so the promotion only moves when a node is
+   genuinely, visibly busier. */
+const HOT_MARGIN = 6;
+let hotHolder = null;
+
+function pickHot(cpus){
+  const live = Object.keys(cpus);
+  if(!live.length) return (hotHolder = null);
+  const best = live.reduce((a,b)=> cpus[b] > cpus[a] ? b : a);
+  if(hotHolder === null || !(hotHolder in cpus)) hotHolder = best;   /* incumbent gone */
+  else if(cpus[best] >= cpus[hotHolder] + HOT_MARGIN) hotHolder = best;
+  return hotHolder;
+}
+
+/* ── service rows ─────────────────────────────────────────────────────
+   Rebuilt from scratch each poll rather than diffed: seven rows is nothing,
+   and it removes any chance of a stale row surviving a shape change in the
+   payload. `services === null` means the collector could not reach Kuma —
+   distinct from an empty list, and it must never render as "all clear". */
+const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+function renderServices(d){
+  const box = $("#services");
+  const dead = d.services === null || d.services === undefined;
+  box.classList.toggle("dead", dead);
+
+  if(dead){
+    $("#svc-count").textContent = "—";
+    $("#svc-err").textContent = d.kumaError
+      ? esc(d.kumaError).toUpperCase() : "STATUS PAGE UNREACHABLE";
+    return;
+  }
+
+  const svcs = d.services;
+  $("#svc-count").textContent = `${svcs.filter(s=>s.up).length}/${svcs.length}`;
+
+  $("#svc-list").innerHTML = svcs.map(s=>{
+    const beats = (s.beats||[]).map(b=>`<i class="${b?"":"d"}"></i>`).join("")
+      || '<i class="n"></i>'.repeat(48);
+    const up24 = s.up24 == null ? "—" : (s.up24*100).toFixed(s.up24 >= 0.9995 ? 0 : 2)+"%";
+    const ping = s.ping == null ? "—" : s.ping+"ms";
+    return `<div class="svc${s.up?"":" down"}">
+      <div class="svc-dot"></div>
+      <div><div class="svc-name">${esc(s.name)}</div>
+           <div class="svc-tier">${s.up?"稼 働":"停 止"} · ${esc(s.tier)}</div></div>
+      <div class="svc-beats">${beats}</div>
+      <div class="svc-up">${up24}<small>24H</small></div>
+      <div class="svc-ping">${ping}<small>PING</small></div>
+    </div>`;
+  }).join("");
+}
+
+function render(d){
+  /* LINK LOST is a distinct state from EMERGENCY and the difference matters:
+     EMERGENCY asserts the cluster is broken, LINK LOST asserts only that we
+     cannot see it. Both are red; only one blames melchior. Units go 不明
+     (unknown) rather than 停止, because a dead collector is not evidence a
+     node is down. */
+  const lost = d.link === false;
+
+  /* Critical state is decided BEFORE anything is painted, because the colours
+     the units and sparklines are drawn with depend on it. Quorum is tested
+     first, so losing it can never render as anything but critical, and a
+     missing `quorate` field is falsy — unknown quorum fails safe. */
+  const crit = lost || !d.quorate || d.priority === "S+";
+  document.body.classList.toggle("crit", crit);
+  readPalette();
+
+  const nodes = Object.fromEntries((d.nodes||[]).map(n=>[n.node,n]));
+  let online = 0, downUnit = "—";
+  const liveCpu = {};
+
+  UNITS.forEach(u=>{
+    const el = document.getElementById("v-"+u.node);
+    const n  = nodes[u.node];
+    const live = n && n.status === "online";
+
+    el.classList.toggle("dark", !live);
+    el.classList.toggle("down", !!(n && !live));
+
+    if(!live){
+      const st = lost ? "不 明" : n ? "停 止" : "未配備";
+      if(n && !lost) downUnit = u.name;
+      el.querySelector(".stxt").textContent = st;
+      el.querySelector(".cpu").textContent  = "—";
+      el.querySelectorAll(".fill").forEach(f=>f.style.width="0%");
+      el.querySelectorAll(".gval").forEach(v=>v.textContent="—");
+      el.querySelector(".v-up").textContent   = "—";
+      el.querySelector(".v-load").textContent = "—";
+      delete HIST[u.node];
+      paintUnit(u.node, n ? "down" : "void", 0);
+      return;
+    }
+    online++;
+
+    const cpu  = Math.round((n.cpu||0)*100);
+    const mem  = Math.round((n.mem/n.maxmem)*100);
+    const disk = Math.round((n.disk/n.maxdisk)*100);
+    liveCpu[u.node] = cpu;
+
+    el.querySelector(".stxt").textContent   = "稼 働";
+    el.querySelector(".cpu").textContent    = cpu;
+    el.querySelector(".f-mem").style.width  = mem+"%";
+    el.querySelector(".v-mem").textContent  = mem+"%";
+    el.querySelector(".f-disk").style.width = disk+"%";
+    el.querySelector(".v-disk").textContent = disk+"%";
+
+    /* Third gauge is SWAP, permanently. Temperature was considered and
+       dropped: PVE exposes no sensor data at all, so it would mean adding
+       Beszel as a second data source — a PocketBase auth token that expires
+       every 7 days — for one number. Swap pressure is arguably the better
+       vital anyway: it is what tells you a node is in trouble before it
+       starts thrashing. */
+    let tPct=0, tText="—";
+    if(n.swap && n.swap.total){
+      tPct=Math.round(n.swap.used/n.swap.total*100); tText=tPct+"%";
+    }
+    el.querySelector(".f-third").style.width = tPct+"%";
+    el.querySelector(".v-third").textContent = tText;
+    el.querySelector(".v-up").textContent    = fmtUptime(n.uptime);
+    el.querySelector(".v-load").textContent  = n.loadavg ? n.loadavg[0] : "—";
+
+    if(!HIST[u.node]) HIST[u.node] = Array(HIST_MAX).fill(cpu);
+    HIST[u.node].push(cpu);
+    if(HIST[u.node].length > HIST_MAX) HIST[u.node].shift();
+    drawSpark(el, u.node);
+
+    paintUnit(u.node, "live", cpu);
+  });
+
+  /* the busiest node goes solid, as the reference's active lobe does */
+  const hot = pickHot(liveCpu);
+  if(hot) paintUnit(hot, "hot", liveCpu[hot]);
+
+  /* ── the data block. Every value is derived, none is decorative. ──
+     CODE is the count of RUNNING LXCs cluster-wide — the number that moves
+     when the lab actually changes, and the one worth a glance from across
+     the room. Failing checks are still represented, by PRIORITY, the verdict
+     badge and the CHECKS pair in the ticker; they don't need a fourth slot. */
+  const inc = lost ? 0 : (d.incidents || 0);
+  $("#d-code").textContent = lost ? "———"    : pad3(d.lxcRunning || 0);
+  $("#d-file").textContent = lost ? "—"      : (d.lastTask || "—");
+  $("#d-ext").textContent  = lost ? "————"   : String(d.guests || 0).padStart(4,"0");
+  $("#d-mode").textContent = lost ? "NO LINK": (d.quorate ? "QUORATE" : "DEGRADED");
+  $("#d-prio").textContent = lost ? "—"      : (d.priority || "—");
+
+  /* ── verdict. Four states, and they mean exactly what they say. ──
+     PROTECTED  quorate, every expected unit up, no failing check
+     DILEMMA    quorate but something disagrees — a check down, a unit off
+     EMERGENCY  quorum lost, or a p1 service is down
+     LINK LOST  the collector is dead or its data is stale
+
+     Note the ordering: quorum is tested FIRST, so losing quorum can never
+     render as PROTECTED or even DILEMMA. A missing `quorate` field is falsy
+     and therefore also critical — unknown quorum fails safe, never nominal. */
+  renderServices(lost ? {services:null, kumaError:"COLLECTOR LINK LOST"} : d);
+
+  /* Losing sight of Kuma is a DILEMMA, not an EMERGENCY: we have lost
+     visibility of service health, which is not the same as the cluster being
+     broken. It must still raise something, or the panel would look nominal
+     while blind. */
+  const v = $("#verdict");
+  const blind = !lost && (d.services === null || d.services === undefined);
+  const warn = !crit && (inc > 0 || blind || online < (d.expected || online));
+  v.textContent = lost ? "LINK LOST" : crit ? "EMERGENCY" : warn ? "DILEMMA" : "PROTECTED";
+  v.className   = "display " + (crit ? "crit" : warn ? "warn" : "");
+
+  /* Re-fire the takeover when the FAULT changes — keyed on its kind, never on
+     the failing-check count. A count flickering 11→12→11 would otherwise
+     restart the 30 s window every poll and the takeover would never retire. */
+  if(!crit){
+    alertSince = null; takeoverUntil = 0; faultKey = null;
+  }else{
+    const key = [lost, !!d.quorate, d.priority || "", downUnit].join("|");
+    if(key !== faultKey){
+      faultKey = key;
+      alertSince ??= Date.now();
+      takeoverUntil = Date.now() + TAKEOVER_MS;
+    }
+  }
+  updateTakeover();
+
+  $("#e-unit").textContent   = lost ? "—" : downUnit;
+  $("#e-count").textContent  = lost ? "—" : inc;
+  $("#e-quorum").textContent = lost ? "UNKNOWN" : d.quorate ? "HELD" : "LOST";
+  $("#e-word").textContent   = lost ? "LINK LOST"
+                             : d.quorate ? "PRIORITY BREACH" : "QUORUM LOST";
+
+  /* HELD/LOST, not "n/m": /cluster/status reports quorum as a bare flag with
+     no vote counts, and it does not list the QDevice at all. An n/m here
+     would be a number nothing can source. */
+  $("#hquorum").textContent = lost ? "—" : (d.quorate ? "HELD" : "LOST");
+  $("#honline").textContent = online;
+  $("#bootnodes").textContent = online+" FOUND";
+
+  const stamp = new Date().toLocaleTimeString("en-GB");
+  const line = `MAGI SYSTEM <span>${d.cluster||"CLUSTER"}</span> · UNITS <span>${online}/3</span> · `
+    + UNITS.map(u=>{const n=nodes[u.node];
+        return n&&n.status==="online"
+          ? `${u.name} <span>稼働</span> CPU ${Math.round((n.cpu||0)*100)}% MEM ${Math.round(n.mem/n.maxmem*100)}%`
+          : `${u.name} <span>${n?"停止":"未配備"}</span>`;
+      }).join(" · ")
+    + ` · CHECKS <span>${(d.checksUp||0)}/${(d.checksTotal||0)}</span> · SYNC ${stamp} · `;
+  $("#tick").innerHTML = line + line;
+}
+
+/* elapsed clock on the emergency screen, ticking independently of polls */
+/* Runs every second, so the takeover retires on time rather than waiting for
+   the next 5 s poll to notice. */
+function tickElapsed(){
+  $("#e-since").textContent = alertSince ? fmtHMS((Date.now()-alertSince)/1000) : "00:00:00";
+  updateTakeover();
+}
+
+/* ── demo payloads ────────────────────────────────────────────────────
+   OPT-IN ONLY — `?demo` in the URL, or pressing 1–4. A wall panel
+   must never fall back to demo data on error: the rack panel did, which
+   meant a dead collector rendered a healthy cluster under a live clock.
+   That is the worst failure a monitor can have, so the fallback is now
+   LINK LOST and the demo has to be asked for. */
+/* Demo services mirror the real status page: the same 7 group monitors, with
+   the p1/p2/p3 tiers that drive PRIORITY. `bad` flips one row down. */
+const BEATS = (downAt) => Array.from({length:48},(_,i)=> downAt!=null && i>=downAt ? 0 : 1);
+const SVC = (id,name,tier,up,ping,up24,downAt) =>
+  ({id,name,tier,up,ping,up24,beats:BEATS(downAt)});
+const SERVICES = bad => [
+  SVC(126,"Heartbeats","B",true,2,1),
+  SVC(20,"Home Infra","B",true,3,0.7679),
+  SVC(21,"Torrentbox","B",true,9,1),
+  SVC(123,"p1 — Household critical","S+",!bad,bad?null:2,bad?0.912:1,bad?44:null),
+  SVC(124,"p2 — Core services","A+",true,7,1),
+  SVC(125,"p3 — Background","A-",true,7,0.9965),
+  SVC(22,"Websites","B",true,5,1),
+];
+
+const NODE = (name,cpu,mem,disk,up,load,sw) => ({
+  node:name, status:"online", cpu:cpu, mem:mem*1e9, maxmem:32e9,
+  disk:disk*1e9, maxdisk:100e9, uptime:up, loadavg:[load,"0.9","1.1"],
+  swap:{used:sw*1e9, total:8e9}
+});
+const DEMO = {
+  1:{cluster:"MAGI", quorate:true, guests:39, lxcRunning:38, incidents:0, services:SERVICES(false),
+     lastTask:"VZDUMP_OK", priority:"—", checksUp:7, checksTotal:7, expected:2,
+     nodes:[NODE("melchior",0.19,11,6.7,808870,"0.59",3.7),
+            NODE("balthasar",0.06,4,2.1,91240,"0.21",0.4)]},
+  2:{cluster:"MAGI", quorate:true, guests:39, lxcRunning:36, incidents:1, services:SERVICES(true),
+     lastTask:"STOP_CT_214", priority:"A-", checksUp:6, checksTotal:7, expected:2,
+     nodes:[NODE("melchior",0.71,24,6.9,808870,"3.42",6.1),
+            NODE("balthasar",0.11,5,2.1,91240,"0.34",0.4)]},
+  /* 3 — a node down but quorum HELD. This is the realistic degradation:
+     losing balthasar leaves melchior + a QDevice at 2/3, which is
+     still quorate, so the panel stays on the schematic and BALTHASAR renders
+     red in place. The takeover would hide exactly that. */
+  3:{cluster:"MAGI", quorate:true, guests:39, lxcRunning:31, incidents:1, services:SERVICES(true),
+     lastTask:"STOP_CT_300", priority:"A+", checksUp:6, checksTotal:7, expected:2,
+     nodes:[NODE("melchior",0.34,14,6.9,808870,"1.90",4.2),
+            {node:"balthasar", status:"offline"}]},
+  /* 4 — quorum lost. Full-screen takeover; the schematic is not visible. */
+  4:{cluster:"MAGI", quorate:false, guests:39, lxcRunning:29, incidents:1, services:SERVICES(true),
+     lastTask:"NODE_FENCE", priority:"S+", checksUp:6, checksTotal:7, expected:2,
+     nodes:[NODE("melchior",0.94,29,7.1,808870,"9.80",7.4),
+            {node:"balthasar", status:"offline"}]},
+};
+let demoKey = 1;
+let demoMode = location.search.includes("demo");
+
+/* A collector that dies leaves its last data.json on disk. Without a
+   staleness test the panel shows that last good reading forever, and the
+   clock keeps ticking above it — it looks live and is frozen. 30 s is six
+   poll intervals, so a single missed tick doesn't trip it. */
+const STALE_AFTER = 30;
+
+async function poll(){
+  if(demoMode) return render(DEMO[demoKey]);
+  try{
+    const r = await fetch("data.json?t="+Date.now(), {cache:"no-store"});
+    if(!r.ok) throw 0;
+    const d = await r.json();
+    if(d.updated && (Date.now()/1000 - d.updated) > STALE_AFTER) d.link = false;
+    render(d);
+  }catch(e){ render({link:false, cluster:"MAGI"}); }
+}
+
+/* 1 PROTECTED · 2 DILEMMA (checks failing) · 3 DILEMMA (node down, quorum held)
+   4 EMERGENCY (quorum lost, takeover) · 0 back to live */
+addEventListener("keydown", e=>{
+  if(["1","2","3","4"].includes(e.key)){ demoMode = true; demoKey = +e.key; render(DEMO[demoKey]); }
+  if(e.key === "0"){ demoMode = false; poll(); }      /* back to live */
+});
+
+function tickClock(){
+  const d=new Date();
+  $("#clock").textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/* Fit the fixed stage to whatever window it lands in. Designed at 1080x1920 —
+   exactly DP-1 — so fullscreen gives scale 1 and every hairline stays crisp. */
+function fit(){
+  /* Never upscale: the panel is pixel-designed at 1080x1100 and the target
+     window is exactly that. Growing it past 1:1 only softens the hairlines. */
+  const s = Math.min(1, innerWidth/1080, innerHeight/1920);
+  $("#stage").style.transform = `translate(-50%,-50%) scale(${s})`;
+}
+addEventListener("resize", fit); fit();
+
+tickClock();   setInterval(tickClock,1000);
+tickElapsed(); setInterval(tickElapsed,1000);
+poll();        setInterval(poll,5000);
+</script>

@@ -1,0 +1,8 @@
+# Personal working notes — not for publication
+CLAUDE.md
+*-PLAN.md
+
+__pycache__/
+*.pyc
+*.xwd
+data.json

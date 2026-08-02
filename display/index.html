@@ -1,0 +1,499 @@
+<meta charset="utf-8">
+<title>MAGI SYSTEM</title>
+<style>
+/* ── MAGI SYSTEM · 1280x400 rack panel ───────────────────────────────
+   Palette shared with display/console.html. This panel was
+   amber-monochrome; the reference frames run a strict three-colour system
+   and each colour keeps one job, which is most of what makes it read as
+   MAGI rather than as a dark dashboard:
+     ORANGE  frame, structure, all label text and values
+     BLUE    the units themselves — accent bar, glow, CPU trace
+     GREEN   the live status chip and the header accent rules
+   Red stays in reserve for the alert state, so a red panel always means
+   something is actually wrong.                                          */
+:root{
+  --o:#ff6a00;          --o-hi:#ff9440;      --o-dim:#a34300;
+  --o-ghost:#4a2000;    --o-line:rgba(255,106,0,.35);
+  --blue:#1b4fd8;       --blue-hi:#3a6bff;
+  --green:#00e567;
+  --red:#ff2d2d;        --red-dim:#7a1010;
+  --bg:#000;
+  /* Canvas colours can't read a CSS var, so the sparkline's are declared here
+     and looked up per render — otherwise the alert state below turns the whole
+     panel red and leaves three blue CPU traces sitting on top of it. */
+  --trace-rgb:125,155,255;  --trace-hi:#dbe6ff;  --frame-rgb:255,106,0;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:#000;overflow:hidden}
+/* Japanese renders in Noto Serif CJK JP Black — a heavy Mincho standing in for
+   Matisse EB, the face Evangelion actually uses on the NERV/MAGI interfaces.
+   Installed via fonts-noto-cjk-extra on 2026-08-02; before that the Pi had no
+   Mincho at all and fell back to Droid Sans Fallback (a Gothic sans).
+   It sits LAST on purpose: per-character fallback means Latin resolves to the
+   mono face first and only kana/kanji reach the Mincho. */
+body{display:grid;place-items:center;
+  font-family:"DejaVu Sans Mono",Consolas,"Liberation Mono",
+              "Noto Serif CJK JP Black","Noto Serif CJK JP",monospace;
+  -webkit-font-smoothing:none;cursor:none}
+
+/* Fixed 1280x400 stage, scaled to whatever viewport it lands in */
+#stage{position:relative;width:1280px;height:400px;background:var(--bg);
+  transform-origin:center;overflow:hidden}
+
+/* ── ambient layers ── */
+#stage::before{ /* hex/grid wash */
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:5;
+  background:
+    repeating-linear-gradient(90deg,transparent 0 63px,rgba(255,106,0,.045) 63px 64px),
+    repeating-linear-gradient(0deg,transparent 0 63px,rgba(255,106,0,.045) 63px 64px);
+}
+#stage::after{ /* scanlines + vignette */
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:60;
+  background:
+    repeating-linear-gradient(0deg,rgba(0,0,0,.42) 0 1px,transparent 1px 3px),
+    radial-gradient(ellipse 90% 130% at 50% 50%,transparent 55%,rgba(0,0,0,.75) 100%);
+  animation:flicker 5.5s infinite steps(1)
+}
+@keyframes flicker{0%,97%{opacity:1}97.5%{opacity:.86}98%{opacity:1}98.5%{opacity:.92}99%{opacity:1}}
+
+/* sweeping scan bar across the whole panel */
+#sweep{position:absolute;top:0;left:-30%;width:22%;height:100%;z-index:55;
+  pointer-events:none;
+  background:linear-gradient(90deg,transparent,rgba(255,106,0,.055),transparent);
+  animation:sweep 9s linear infinite}
+@keyframes sweep{to{left:120%}}
+
+/* ── header ── */
+header{position:absolute;top:0;left:0;right:0;height:38px;z-index:20;
+  display:flex;align-items:center;gap:14px;padding:0 16px;
+  border-bottom:1px solid var(--o-line)}
+/* Michroma — OFL stand-in for Eurostile Bold Extended, installed 2026-08-02.
+   One weight only, so display text stays at font-weight 400; a synthetic bold
+   on a face this wide smears the verticals. Sizes are cut from the previous
+   values because it runs much wider than the mono fallback.
+   `Eurostile` stays first so a licensed copy would take over unchanged. */
+.display{font-family:"Eurostile","Michroma","DejaVu Sans",
+         "Noto Serif CJK JP Black","Noto Serif CJK JP",sans-serif;
+  font-weight:400}
+.brand{font-size:14px;letter-spacing:.2em;color:var(--o)}
+.brand small{font-size:9px;letter-spacing:.2em;color:var(--o-dim);margin-left:8px}
+.hrule{flex:1;height:1px;background:linear-gradient(90deg,var(--o-line),transparent)}
+/* the reference's green stripe group, flanking the header words */
+.accent{flex:none;display:flex;flex-direction:column;gap:3px;width:58px}
+.accent i{display:block;height:2px;background:var(--green);opacity:.9}
+.hstat{font-size:10px;letter-spacing:.18em;color:var(--o-dim)}
+.hstat b{color:var(--o);font-weight:400}
+#clock{font-size:14px;color:var(--o);letter-spacing:.1em;min-width:78px;text-align:right}
+
+/* ── the three MAGI ── */
+main{position:absolute;top:38px;left:0;right:0;bottom:44px;z-index:20;
+  display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+  background:var(--o-line)}
+.magi{position:relative;background:var(--bg);padding:12px 16px 10px;
+  display:flex;flex-direction:column;overflow:hidden;
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%)}
+
+/* per-unit top-edge accent + slow breathing glow — both BLUE, because in
+   the reference the blue belongs to the MAGI units and nothing else.
+   `.hot` (the busiest online unit) goes solid and bright, the way the
+   reference frames promote one lobe at a time. */
+.magi::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:var(--blue-hi);opacity:.55;transition:opacity .9s ease}
+.magi.hot::before{opacity:1;box-shadow:0 0 14px rgba(58,107,255,.8)}
+.magi.live::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse 70% 55% at 50% 40%,rgba(58,107,255,.09),transparent 70%);
+  animation:breathe 4.2s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:.45}50%{opacity:1}}
+
+/* offline units */
+.magi.dark{color:var(--o-ghost)}
+.magi.dark::before{background:var(--o-ghost);opacity:.7}
+.magi.dark .unit-name,.magi.dark .idx{color:var(--o-ghost)}
+.magi.dark::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.5;
+  background-image:repeating-linear-gradient(0deg,rgba(255,106,0,.03) 0 2px,transparent 2px 4px)}
+
+/* unit header */
+.uhead{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+.unit-name{font-size:17px;letter-spacing:.04em;color:var(--o)}
+.idx{font-size:12px;color:var(--o-dim);letter-spacing:.1em}
+.ujp{font-size:9px;color:var(--o-dim);letter-spacing:.34em;margin-bottom:9px}
+
+/* status chip */
+.status{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;
+  font-size:10px;letter-spacing:.2em;padding:2px 8px;margin-bottom:11px;
+  border:1px solid currentColor;color:var(--green)}
+.dot{width:5px;height:5px;background:currentColor;border-radius:50%;
+  animation:blip 1.6s ease-in-out infinite}
+@keyframes blip{0%,100%{opacity:1}50%{opacity:.15}}
+.magi.dark .status{color:var(--o-ghost);border-color:currentColor}
+.magi.dark .dot{animation:blip 3.4s ease-in-out infinite}
+
+/* the big number */
+.primary{display:flex;align-items:flex-end;gap:10px;margin-bottom:4px}
+.big{font-size:76px;line-height:.82;font-weight:700;color:var(--o-hi);
+  font-variant-numeric:tabular-nums;text-shadow:0 0 22px rgba(255,106,0,.5)}
+.big .pct{font-size:24px;color:var(--o-dim);margin-left:3px}
+.plabel{font-size:9px;letter-spacing:.26em;color:var(--o-dim);padding-bottom:10px}
+.magi.dark .big{color:var(--o-ghost);text-shadow:none;font-size:52px}
+.magi.dark .big .pct{display:none}
+
+/* live CPU history trace — fills the mid-panel and carries the motion */
+.sparkwrap{position:relative;height:74px;margin:6px 0 2px;
+  border-left:1px solid var(--o-line);border-bottom:1px solid var(--o-line)}
+.sparkwrap canvas{display:block;width:100%;height:100%}
+.spark-nosig{position:absolute;inset:0;display:none;place-items:center;
+  font-size:10px;letter-spacing:.3em;color:var(--o-ghost)}
+.magi.dark .sparkwrap{border-color:rgba(255,106,0,.12)}
+.magi.dark .sparkwrap canvas{display:none}
+.magi.dark .spark-nosig{display:grid;animation:blip 3.4s ease-in-out infinite}
+
+/* gauge bars */
+.gauges{margin-top:8px;display:flex;flex-direction:column;gap:7px}
+.g{display:grid;grid-template-columns:34px 1fr 44px;align-items:center;gap:8px;
+  font-size:9px;letter-spacing:.14em;color:var(--o-dim)}
+.track{position:relative;height:7px;border:1px solid var(--o-line);overflow:hidden}
+.fill{position:absolute;inset:0;width:0%;background:var(--o);opacity:.85;
+  transition:width .85s cubic-bezier(.22,1,.36,1)}
+.track::after{ /* segment ticks over the bar */
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(90deg,transparent 0 5px,#000 5px 6px)}
+.gval{text-align:right;color:var(--o);font-variant-numeric:tabular-nums}
+.magi.dark .fill{background:var(--o-ghost)}
+.magi.dark .gval{color:var(--o-ghost)}
+
+/* footer meta row inside a unit */
+.meta{margin-top:auto;display:flex;justify-content:space-between;
+  font-size:9px;letter-spacing:.12em;color:var(--o-dim);
+  border-top:1px solid var(--o-line);padding-top:6px}
+.meta b{color:var(--o);font-weight:400}
+.magi.dark .meta b{color:var(--o-ghost)}
+
+/* ── footer ticker ── */
+/* The ticker runs full width. The hardcoded `CODE:601` that used to sit here
+   was the last decorative field on the panel — a fixed number dressed up as a
+   reading. Removed 2026-08-02 rather than bound to something, because the
+   console panel already carries a CODE and two differently-valued fields of the
+   same name across two screens is worse than none. */
+footer{position:absolute;bottom:0;left:0;right:0;height:44px;z-index:20;
+  border-top:1px solid var(--o-line);display:flex;align-items:center;
+  padding:0 16px;overflow:hidden}
+.tickwrap{flex:1;overflow:hidden;mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent)}
+#tick{display:inline-block;white-space:nowrap;font-size:10px;letter-spacing:.16em;
+  color:var(--o-dim);animation:roll 42s linear infinite}
+#tick span{color:var(--o)}
+@keyframes roll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+
+/* ── alert state ── */
+/* Alert re-points every colour role at red, blue and green included, so the
+   panel goes fully red rather than red-with-cheerful-green-chips. */
+body.alert{--o:var(--red);--o-hi:#ff7b7b;--o-dim:var(--red-dim);
+  --o-ghost:#4a0000;--o-line:rgba(255,45,45,.4);
+  --blue:var(--red);--blue-hi:var(--red);--green:var(--red);
+  --trace-rgb:255,90,90;--trace-hi:#ffd6d6;--frame-rgb:255,45,45}
+body.alert #stage{animation:alarm 1s steps(1) infinite}
+@keyframes alarm{0%,100%{background:#000}50%{background:#160000}}
+
+/* ── boot sequence ── */
+.magi{animation:wipe .55s cubic-bezier(.2,.8,.2,1) backwards}
+.magi:nth-child(1){animation-delay:.15s}
+.magi:nth-child(2){animation-delay:.32s}
+.magi:nth-child(3){animation-delay:.49s}
+@keyframes wipe{from{clip-path:polygon(0 0,100% 0,100% 0,0 0);opacity:0}}
+header,footer{animation:fadein .6s backwards .05s}
+@keyframes fadein{from{opacity:0}}
+#boot{position:absolute;inset:0;z-index:90;background:#000;color:var(--o);
+  font-size:12px;letter-spacing:.18em;padding:20px 24px;line-height:1.9;
+  animation:bootout .35s ease-in forwards 2.1s}
+@keyframes bootout{to{opacity:0;visibility:hidden}}
+#boot i{font-style:normal;color:var(--o-dim)}
+</style>
+
+<div id="stage">
+  <div id="sweep"></div>
+
+  <div id="boot">
+    MAGI SYSTEM<br>
+    <i>SELF DIAGNOSTIC .....</i> OK<br>
+    <i>NODE DISCOVERY .....</i> <span id="bootnodes">SCANNING</span><br>
+    <i>LINK ESTABLISHED</i>
+  </div>
+
+  <header>
+    <div class="brand display">MAGI<small>SYSTEM</small></div>
+    <div class="accent"><i></i><i></i><i></i></div>
+    <div class="hrule"></div>
+    <div class="hstat">CLUSTER <b id="hcluster">—</b></div>
+    <div class="hstat">ONLINE <b id="honline">0</b>/3</div>
+    <div id="clock">--:--:--</div>
+  </header>
+
+  <main id="units"></main>
+
+  <footer>
+    <div class="tickwrap"><div id="tick"></div></div>
+  </footer>
+</div>
+
+<script>
+/* ── unit definitions ─────────────────────────────────────────────────
+   `node` matches the Proxmox node name in /cluster/resources.
+   A unit with no matching node renders dark / 未配備 automatically,
+   so balthasar and casper light up by themselves once they join. */
+const UNITS = [
+  {node:"melchior",  name:"MELCHIOR",  idx:"・1", jp:"科学者"},
+  {node:"balthasar", name:"BALTHASAR", idx:"・2", jp:"母 親"},
+  {node:"casper",    name:"CASPER",    idx:"・3", jp:"女 性"},
+];
+
+const $ = s => document.querySelector(s);
+const pad = n => String(n).padStart(2,"0");
+
+function fmtUptime(sec){
+  if(!sec) return "—";
+  const d=Math.floor(sec/86400), h=Math.floor(sec%86400/3600), m=Math.floor(sec%3600/60);
+  return d>0 ? `${d}d ${pad(h)}h` : `${h}h ${pad(m)}m`;
+}
+
+/* build the three panels once */
+$("#units").innerHTML = UNITS.map(u=>`
+  <section class="magi dark" id="u-${u.node}">
+    <div class="uhead">
+      <div class="unit-name display">${u.name}</div><div class="idx">${u.idx}</div>
+    </div>
+    <div class="ujp">${u.jp}</div>
+    <div class="status"><span class="dot"></span><span class="stxt">未配備</span></div>
+    <div class="primary">
+      <div class="big"><span class="cpu">--</span><span class="pct">%</span></div>
+      <div class="plabel">CPU LOAD</div>
+    </div>
+    <div class="sparkwrap">
+      <canvas class="spark" width="420" height="150"></canvas>
+      <div class="spark-nosig">NO SIGNAL</div>
+    </div>
+    <div class="gauges">
+      <div class="g"><span>MEM</span><div class="track"><div class="fill f-mem"></div></div><span class="gval v-mem">--</span></div>
+      <div class="g"><span>DISK</span><div class="track"><div class="fill f-disk"></div></div><span class="gval v-disk">--</span></div>
+      <div class="g"><span>SWAP</span><div class="track"><div class="fill f-third"></div></div><span class="gval v-third">--</span></div>
+    </div>
+    <div class="meta">
+      <span>UPTIME <b class="v-up">—</b></span>
+      <span>LOAD <b class="v-load">—</b></span>
+    </div>
+  </section>`).join("");
+
+/* ── CPU history traces ──────────────────────────────────────────────
+   One rolling buffer per unit. Samples arrive at the poll interval, so
+   the trace is real data, not synthesised motion — it just fills in over
+   the first few minutes rather than being complete at boot. */
+const HIST = {}, HIST_MAX = 90;
+
+/* Canvas colours read back out of CSS once per render, so the alert palette
+   swaps the sparklines along with everything else. */
+let PAL = {};
+function readPalette(){
+  const cs = getComputedStyle(document.body);
+  const v = (n,d) => (cs.getPropertyValue(n).trim() || d);
+  PAL = { trace:   v("--trace-rgb","125,155,255"),
+          traceHi: v("--trace-hi","#dbe6ff"),
+          frame:   v("--frame-rgb","255,106,0") };
+}
+readPalette();
+
+function pushHist(node, v){
+  (HIST[node] ||= []).push(v);
+  if(HIST[node].length > HIST_MAX) HIST[node].shift();
+}
+
+function drawSpark(el, node){
+  const c = el.querySelector(".spark"), h = HIST[node];
+  if(!c || !h || !h.length) return;
+  const ctx = c.getContext("2d"), W = c.width, H = c.height;
+  ctx.clearRect(0,0,W,H);
+
+  /* Autoscale to the window's own peak. A fixed 0-100 axis renders an idle
+     node as a dead line on the floor — at 2% CPU you see nothing at all.
+     The ceiling is drawn top-left so the scale is never ambiguous. */
+  const peak = Math.max(...h, 1);
+  const ceil = Math.min(100, Math.max(10, Math.ceil(peak*1.35/5)*5));
+
+  ctx.strokeStyle = `rgba(${PAL.frame},.13)`; ctx.lineWidth = 1;
+  [0.5,1].forEach(f=>{
+    const y = H - f*H + (f===1?1:0);
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+  });
+  ctx.fillStyle = `rgba(${PAL.frame},.45)`;
+  ctx.font = "16px 'DejaVu Sans Mono',monospace";
+  ctx.fillText(ceil+"%", 4, 16);
+
+  const step = W / (HIST_MAX - 1);
+  const pt = i => [i*step, H - Math.max(0,Math.min(ceil,h[i]))/ceil * H];
+
+  /* filled area under the trace */
+  ctx.beginPath(); ctx.moveTo(0,H);
+  h.forEach((_,i)=>{ const [x,y]=pt(i); ctx.lineTo(x,y); });
+  ctx.lineTo((h.length-1)*step, H); ctx.closePath();
+  /* The trace is BLUE, not orange. In the reference the blue belongs to the
+     MAGI units themselves and orange to the frame around them; the CPU trace
+     is the unit's own pulse, so it takes the unit colour. */
+  const grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,`rgba(${PAL.trace},.32)`);
+  grad.addColorStop(1,`rgba(${PAL.trace},.02)`);
+  ctx.fillStyle = grad; ctx.fill();
+
+  /* the trace itself */
+  ctx.beginPath();
+  h.forEach((_,i)=>{ const [x,y]=pt(i); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.strokeStyle = `rgb(${PAL.trace})`; ctx.lineWidth = 2; ctx.stroke();
+
+  /* leading-edge marker */
+  const [lx,ly] = pt(h.length-1);
+  ctx.fillStyle = PAL.traceHi;
+  ctx.fillRect(lx-2, ly-2, 4, 4);
+  ctx.strokeStyle = `rgba(${PAL.trace},.45)`;
+  ctx.beginPath(); ctx.moveTo(lx,0); ctx.lineTo(lx,H); ctx.stroke();
+}
+
+/* ── which unit is promoted to solid ──────────────────────────────────
+   Highest CPU among ONLINE units, with hysteresis. At idle the nodes sit
+   within a point or two of each other, so a plain "highest wins" flips the
+   bright accent bar on almost every 5 s poll — motion that looks like
+   information and carries none. A challenger must beat the incumbent by
+   HOT_MARGIN points to take it. */
+const HOT_MARGIN = 6;
+let hotHolder = null;
+
+function pickHot(cpus){
+  const live = Object.keys(cpus);
+  if(!live.length) return (hotHolder = null);
+  const best = live.reduce((a,b)=> cpus[b] > cpus[a] ? b : a);
+  if(hotHolder === null || !(hotHolder in cpus)) hotHolder = best;   /* incumbent gone */
+  else if(cpus[best] >= cpus[hotHolder] + HOT_MARGIN) hotHolder = best;
+  return hotHolder;
+}
+
+function render(data){
+  /* `lost` means the collector is dead or its data is stale — we cannot see
+     the cluster, which is NOT the same claim as the cluster being down. Units
+     read 不明 (unknown) rather than 停止, because a dead collector is no
+     evidence about any node. */
+  const lost = data.link === false;
+
+  /* Alert state is set before anything is painted, because the sparkline
+     colours are read from the palette it switches. */
+  document.body.classList.toggle("alert", lost || !!data.alert);
+  readPalette();
+
+  const nodes = Object.fromEntries((data.nodes||[]).map(n=>[n.node,n]));
+  let online = 0;
+  const liveCpu = {};
+
+  UNITS.forEach(u=>{
+    const el = document.getElementById("u-"+u.node);
+    const n  = nodes[u.node];
+    const live = n && n.status === "online";
+    el.classList.toggle("dark", !live);
+    el.classList.toggle("live", !!live);
+
+    if(!live){
+      el.classList.remove("hot");
+      el.querySelector(".stxt").textContent = lost ? "不 明" : n ? "停 止" : "未配備";
+      el.querySelector(".cpu").textContent  = "—";
+      el.querySelectorAll(".fill").forEach(f=>f.style.width="0%");
+      el.querySelectorAll(".gval").forEach(v=>v.textContent="—");
+      el.querySelector(".v-up").textContent   = "—";
+      el.querySelector(".v-load").textContent = "—";
+      delete HIST[u.node];          /* so a returning node starts clean */
+      return;
+    }
+    online++;
+
+    const cpu  = Math.round((n.cpu||0)*100);
+    const mem  = Math.round((n.mem/n.maxmem)*100);
+    const disk = Math.round((n.disk/n.maxdisk)*100);
+    liveCpu[u.node] = cpu;
+
+    el.querySelector(".stxt").textContent  = "稼 働";
+    el.querySelector(".cpu").textContent   = cpu;
+    el.querySelector(".f-mem").style.width  = mem+"%";
+    el.querySelector(".v-mem").textContent  = mem+"%";
+    el.querySelector(".f-disk").style.width = disk+"%";
+    el.querySelector(".v-disk").textContent = disk+"%";
+
+    /* Third gauge is SWAP, permanently — temperature was considered and
+       dropped rather than deferred. PVE exposes no sensor data at all, so it
+       would mean a second data source (Beszel, with a 7-day auth token) for
+       one number. Swap pressure is the better vital anyway: it is what tells
+       you a node is in trouble before it starts thrashing. */
+    let tPct=0, tText="—";
+    if(n.swap && n.swap.total){
+      tPct=Math.round(n.swap.used/n.swap.total*100); tText=tPct+"%";
+    }
+    el.querySelector(".f-third").style.width  = tPct+"%";
+    el.querySelector(".v-third").textContent  = tText;
+    el.querySelector(".v-up").textContent   = fmtUptime(n.uptime);
+    el.querySelector(".v-load").textContent = n.loadavg ? n.loadavg[0] : "—";
+
+    /* seed the trace flat at the first reading so it renders immediately
+       instead of leaving an empty box for the first few minutes */
+    if(!HIST[u.node]) HIST[u.node] = Array(HIST_MAX).fill(cpu);
+    pushHist(u.node, cpu);
+    drawSpark(el, u.node);
+  });
+
+  /* one unit promoted at a time, as the reference frames do */
+  const hot = pickHot(liveCpu);
+  UNITS.forEach(u=>document.getElementById("u-"+u.node)
+                        .classList.toggle("hot", u.node === hot));
+
+  $("#honline").textContent  = lost ? "—" : online;
+  $("#hcluster").textContent = lost ? "NO LINK" : (data.cluster || "—");
+  $("#bootnodes").textContent = online+" FOUND";
+
+  const stamp = new Date().toLocaleTimeString("en-GB");
+  const line = lost
+    ? `LINK LOST <span>COLLECTOR UNREACHABLE OR STALE</span> · CLUSTER STATE <span>UNKNOWN</span> · LAST ATTEMPT ${stamp} · `
+    : `MAGI SYSTEM <span>${data.cluster||"CLUSTER"}</span> · UNITS ONLINE <span>${online}/3</span> · `
+      + UNITS.map(u=>{const n=nodes[u.node];
+          return n&&n.status==="online"
+            ? `${u.name} <span>稼働</span> CPU ${Math.round((n.cpu||0)*100)}% MEM ${Math.round(n.mem/n.maxmem*100)}%`
+            : `${u.name} <span>未配備</span>`;
+        }).join(" · ")
+      + ` · SYNC ${stamp} · `;
+  $("#tick").innerHTML = line + line;   /* doubled for seamless -50% roll */
+}
+
+/* Demo data, OPT-IN ONLY via `?demo` in the URL.
+   This used to be the error fallback, which was a real hazard: a dead
+   collector rendered a healthy demo cluster under a live ticking clock —
+   the panel looked fine and was lying. The fallback is now LINK LOST. */
+const DEMO = {cluster:"MAGI", alert:false, nodes:[{
+  node:"melchior", status:"online", cpu:0.0154, mem:10467389440, maxmem:33369886720,
+  disk:6742765568, maxdisk:100861726720, uptime:808870, loadavg:["0.59","0.82","1.06"],
+  swap:{used:3778007040, total:8589930496}
+}]};
+const demoMode = location.search.includes("demo");
+
+/* A dead collector leaves its last data.json behind, so a successful fetch
+   is not proof of freshness. 30 s is six poll intervals — one missed tick
+   never trips it. */
+const STALE_AFTER = 30;
+
+async function poll(){
+  if(demoMode) return render(DEMO);
+  try{
+    const r = await fetch("data.json?t="+Date.now(), {cache:"no-store"});
+    if(!r.ok) throw 0;
+    const d = await r.json();
+    if(d.updated && (Date.now()/1000 - d.updated) > STALE_AFTER) d.link = false;
+    render(d);
+  }catch(e){ render({link:false}); }
+}
+
+function tickClock(){
+  const d=new Date();
+  $("#clock").textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+tickClock(); setInterval(tickClock,1000);
+poll();      setInterval(poll,5000);
+</script>

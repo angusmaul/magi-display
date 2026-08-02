@@ -1,0 +1,29 @@
+# labwc autostart — MAGI rack display (https://github.com/angusmaul/magi-display)
+# Read by labwc at session start (~/.config/labwc/autostart).
+#
+# The kiosk is NOT a systemd service on purpose: it must attach to the user's
+# Wayland session, and a system unit has no route to that socket. labwc's own
+# autostart runs inside the session, which is exactly where Chromium needs to be.
+
+# Wait for magi-web before Chromium loads the page. On a cold boot the session
+# can come up before the web server does, and Chromium would land on a
+# connection-refused page and sit there forever — it does not retry a failed
+# navigation on its own.
+for i in $(seq 1 30); do
+  curl -sf -o /dev/null http://127.0.0.1:8080/index.html && break
+  sleep 1
+done
+
+# --incognito keeps a clean profile each boot, which is what suppresses the
+# "Restore pages?" bubble after an unclean shutdown — on a kiosk there is no
+# one there to dismiss it, and it would sit over the display indefinitely.
+chromium \
+  --kiosk \
+  --ozone-platform=wayland \
+  --noerrdialogs \
+  --disable-infobars \
+  --incognito \
+  --disable-session-crashed-bubble \
+  --disable-features=Translate \
+  --check-for-update-interval=31536000 \
+  http://127.0.0.1:8080/index.html &
