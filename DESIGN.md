@@ -210,6 +210,35 @@ every size using it was cut and its tracking reduced to near zero.
 
 ---
 
+## The box is not the source
+
+A panel is static files copied onto a machine, which makes it unusually easy to edit in place. That
+is worth naming as a hazard rather than trusting people not to do, because the incentives all point
+the wrong way: editing on the box is fast and local, and reinstalling over a working display feels
+risky *precisely because you cannot see what you would be overwriting*. So the safe-feeling choice is
+the one that causes the drift, and the drift then makes the next reinstall feel riskier still.
+
+It also fails quietly. Nothing breaks when the box and the repo diverge — the screen keeps working,
+and you find out months later when you try to change something and the file does not look how you
+remember. By then neither copy is obviously the truth.
+
+Two small things break the loop, and neither is a process:
+
+- `install.sh` writes `$MAGI_HOME/INSTALLED` with the source revision, so a running panel can be
+  *asked* where it came from. A dirty tree is recorded as dirty, because deployed bytes that exist
+  nowhere in history should say so.
+- `bin/magi-verify` diffs a box against the checkout and exits non-zero on drift, so "are these the
+  same" is one command instead of an afternoon.
+
+The rule they support: **`MAGI_HOME` is build output**, and local facts live in `/etc/magi/magi.env`,
+which the installer never overwrites. The one place this repo still violates its own rule is the
+`UNITS` array — node names sitting in the page that `install.sh` overwrites. That is a known wart,
+documented in the README rather than quietly tolerated, and the honest reason it is still there is
+that the SVG element ids are keyed on node name too, so lifting it into config is a real refactor
+rather than a move.
+
+---
+
 ## Things deliberately not done
 
 **No temperature.** The Proxmox API exposes no sensor data whatsoever, so a temperature readout means

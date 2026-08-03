@@ -90,6 +90,15 @@ case "$panel" in
 esac
 
 # ── content ───────────────────────────────────────────────────────────
+# CR-stripped copies of the repo files, made once and reused.
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT INT TERM
+nocr() {
+  _out="$TMP/$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+  [ -f "$_out" ] || tr -d '\r' < "$1" > "$_out"
+  printf '%s' "$_out"
+}
+
 drift=0
 check() {
   _label="$1"; _local="$2"; _remote="$3"
@@ -100,15 +109,21 @@ check() {
   fi
   # Compare content, not mtime or size: a hand-edit that happens to preserve
   # length is exactly the kind of drift worth catching.
-  if remote "cat '$_remote'" | diff -q - "$_local" >/dev/null 2>&1; then
+  #
+  # Carriage returns are stripped from both sides first. A checkout on Windows
+  # with core.autocrlf=true has CRLF working-copy files, and install.sh already
+  # strips them on the way onto the box — so without this, verifying from a
+  # Windows checkout reports every single line of every file as drift, which
+  # would make the tool useless exactly once and then be ignored forever.
+  if remote "cat '$_remote'" | tr -d '\r' | diff -q - "$(nocr "$_local")" >/dev/null 2>&1; then
     echo "   ok       $_label"
   else
-    n="$(remote "cat '$_remote'" | diff - "$_local" | grep -c '^[<>]' || true)"
+    n="$(remote "cat '$_remote'" | tr -d '\r' | diff - "$(nocr "$_local")" | grep -c '^[<>]' || true)"
     echo "   DRIFTED  $_label — $n differing line(s)"
     drift=1
     if [ "$SHOW_DIFF" -eq 1 ]; then
-      remote "cat '$_remote'" | diff -u - "$_local" \
-        | sed -e 's/^/     /' -e "s|$_local|REPO|" || true
+      remote "cat '$_remote'" | tr -d '\r' | diff -u - "$(nocr "$_local")" \
+        | sed -e 's/^/     /' -e "s|$(nocr "$_local")|REPO|" || true
     fi
   fi
 }
