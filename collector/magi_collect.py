@@ -63,6 +63,11 @@ def tier_of(name):
 # changes on the order of hours, and re-reading it every 5 s would be the one
 # genuinely wasteful call in this collector.
 TASK_INTERVAL = int(os.environ.get("MAGI_TASK_INTERVAL", "60"))
+
+# Guest rootfs warning line, in percent. If you also run a monitoring system
+# with a disk threshold, set this to the same number: two tools disagreeing
+# about what counts as "too full" is worse on a wall panel than either alone.
+GUEST_FS_WARN = float(os.environ.get("MAGI_GUEST_FS_WARN", "80"))
 _task_cache = {"at": 0.0, "value": None}
 
 
@@ -216,6 +221,49 @@ def collect(cfg, ctx):
             1 for g in guests
             if g.get("type") == "lxc" and g.get("status") == "running"
         )
+
+        # Guest filesystem pressure, per node. A container quietly filling its
+        # own rootfs is one of the few failures that is both slow enough to
+        # catch and bad enough to matter — and it rarely presents as a disk
+        # problem. A full rootfs can break the DHCP client's lease file, so the
+        # guest loses its reservation and the whole thing reads as a networking
+        # fault instead.
+        #
+        # These numbers come out of the /cluster/resources call above, which the
+        # collector already makes, so this costs no extra request. That is the
+        # cheap reason to source it here. The real reason is that a monitoring
+        # service usually runs *as a guest on the cluster it monitors*, and a
+        # panel whose job is to say the cluster is in trouble must not depend on
+        # something inside the cluster to tell it so — the same rule that says
+        # this panel is served from the box driving the screen, not from a node.
+        #
+        # `worst` is emitted whether or not anything is over the line: it is the
+        # useful number for a trend, and costs nothing. `over` is what the panel
+        # renders, and stays empty almost always.
+        fs = {}
+        for g in guests:
+            if g.get("type") != "lxc" or g.get("status") != "running":
+                continue
+            e = fs.setdefault(g.get("node"),
+                              {"total": 0, "unsized": 0, "worst": None, "over": []})
+            maxd = g.get("maxdisk") or 0
+            if not maxd:
+                # A guest reporting no size is not a guest at 0%. Count it
+                # separately rather than letting it read as healthy — VMs
+                # without a guest agent land here.
+                e["unsized"] += 1
+                continue
+            pct = round(g.get("disk", 0) / maxd * 100, 1)
+            entry = {"name": g.get("name"), "pct": pct}
+            e["total"] += 1
+            if e["worst"] is None or pct > e["worst"]["pct"]:
+                e["worst"] = entry
+            if pct >= GUEST_FS_WARN:
+                e["over"].append(entry)
+        for e in fs.values():
+            e["over"].sort(key=lambda x: -x["pct"])
+        payload["guestFs"] = fs
+        payload["guestFsWarn"] = GUEST_FS_WARN
 
         # Quorum. /cluster/status is the ONLY endpoint that reports it, and it
         # reports it as a bare flag: there are no vote counts and the QDevice

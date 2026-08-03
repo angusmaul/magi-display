@@ -171,6 +171,28 @@ header{position:absolute;top:0;left:0;right:0;height:58px;z-index:20;
 .unit-label.t-hot{fill:var(--hot-ink)}
 .unit-sub.t-hot{fill:var(--hot-ink-dim)}
 
+/* Guest filesystem alert, inside the lobe itself — one more line in the unit's
+   own text stack (label / kanji / alert) on the same 36px rhythm, so it reads
+   as part of the unit rather than an annotation stuck to it.
+
+   Set to the EMPTY STRING when nothing on that node is over the line. An SVG
+   <text> with no content draws nothing at all, so there is no placeholder and
+   no reserved space: this is an alert, not a readout. A permanent bar sitting
+   at 42% would be one more number you stop seeing. */
+.unit-alert{font-size:14px;letter-spacing:.06em;text-anchor:middle;
+  dominant-baseline:middle;fill:var(--red);
+  /* A black halo, drawn UNDER the fill via paint-order. The lobe body is not
+     one colour: the busiest node goes solid --blue, and red on solid blue
+     collapses to a muddy maroon — so without this the alert is least legible
+     on the node working hardest, which is the one you most want to read. */
+  stroke:#000;stroke-width:3.5;paint-order:stroke fill;
+  animation:alertpulse 1.8s ease-in-out infinite}
+/* NOT blip. blip bottoms out at opacity .25, which is fine for a 6px dot whose
+   only job is to move — but this line carries a name and a number, and an
+   alert you might glance at mid-cycle must never be unreadable. A floor of .55
+   still reads as a pulse across the room while staying legible at every frame. */
+@keyframes alertpulse{0%,100%{opacity:1}50%{opacity:.55}}
+
 /* ── data block (left inset, inside the schematic) ── */
 #datablock{position:absolute;left:44px;top:150px;z-index:30;
   font-size:15px;letter-spacing:.1em;line-height:1.62;color:var(--o-dim)}
@@ -429,6 +451,7 @@ body.takeover #emerg{display:block}
         points="400,120 680,120 680,270 620,330 460,330 400,270"/>
       <text id="t-balthasar" class="unit-label display t-void" x="540" y="196">BALTHASAR·2</text>
       <text id="j-balthasar" class="unit-sub t-void"  x="540" y="232">母 親</text>
+      <text id="a-balthasar" class="unit-alert" x="540" y="268"></text>
 
       <text class="core-label display" x="540" y="404">MAGI·01</text>
       <text class="core-sub"   x="540" y="437">ORIGINAL</text>
@@ -438,12 +461,14 @@ body.takeover #emerg{display:block}
         points="46,380 290,380 350,440 350,552 46,552"/>
       <text id="t-casper" class="unit-label display t-void" x="198" y="458">CASPER·3</text>
       <text id="j-casper" class="unit-sub t-void"  x="198" y="494">女 性</text>
+      <text id="a-casper" class="unit-alert" x="198" y="530"></text>
 
       <!-- MELCHIOR · 1 — bottom right, mirrored -->
       <polygon id="s-melchior" class="unit-shape u-void"
         points="790,380 1034,380 1034,552 730,552 730,440"/>
       <text id="t-melchior" class="unit-label display t-void" x="882" y="458">MELCHIOR·1</text>
       <text id="j-melchior" class="unit-sub t-void"  x="882" y="494">科学者</text>
+      <text id="a-melchior" class="unit-alert" x="882" y="530"></text>
     </svg>
 
     <!-- Every field below is live. Nothing here is set dressing. -->
@@ -705,6 +730,28 @@ function renderServices(d){
   }).join("");
 }
 
+/* Guest filesystem pressure for one lobe — see the note in magi_collect.py for
+   why this is sourced from the Proxmox API rather than from a monitoring
+   service running inside the cluster.
+
+   Deliberately does NOT feed `crit`. A container filling its rootfs wants a
+   human this week; the EMERGENCY takeover asserts the cluster is broken now.
+   Promoting one into the other spends the takeover's credibility on a warning,
+   which is how a red screen stops meaning anything. */
+function setGuestFs(node, d){
+  const el = document.getElementById("a-" + node);
+  if(!el) return;
+  const fs = (d.guestFs || {})[node];
+  /* An absent guestFs means an older collector, or MAGI_EXTRA off — which is
+     not the same claim as "nothing is over the line". Say nothing rather than
+     render an all-clear the payload cannot support. */
+  const over = (fs && fs.over) || [];
+  if(!over.length){ el.textContent = ""; return; }
+  const w = over[0];
+  el.textContent = "容量 " + w.name + " " + Math.round(w.pct) + "%" +
+                   (over.length > 1 ? " +" + (over.length - 1) : "");
+}
+
 function render(d){
   /* LINK LOST is a distinct state from EMERGENCY and the difference matters:
      EMERGENCY asserts the cluster is broken, LINK LOST asserts only that we
@@ -743,6 +790,8 @@ function render(d){
       el.querySelector(".v-up").textContent   = "—";
       el.querySelector(".v-load").textContent = "—";
       delete HIST[u.node];
+      /* A node we cannot see tells us nothing about its guests' disks. */
+      setGuestFs(u.node, {});
       paintUnit(u.node, n ? "down" : "void", 0);
       return;
     }
@@ -780,6 +829,7 @@ function render(d){
     if(HIST[u.node].length > HIST_MAX) HIST[u.node].shift();
     drawSpark(el, u.node);
 
+    setGuestFs(u.node, d);
     paintUnit(u.node, "live", cpu);
   });
 

@@ -81,10 +81,10 @@ dropping privileges, so the service user can never read the secret off disk).
 | `MAGI_EXTRA` | `0` | Console panel: guest counts + quorum. 2 extra calls per tick |
 | `MAGI_KUMA_URL` | *(unset)* | Console panel: Uptime Kuma base URL. Unset disables the section |
 | `MAGI_KUMA_SLUG` | `main` | Status page slug |
+| `MAGI_GUEST_FS_WARN` | `80` | Percent at which a guest's rootfs is called out on its node's lobe |
 
 Node names are the one thing not in the env file — edit the `UNITS` array at the top of the
 `<script>` block in the page.
-
 ### Unattended / kiosk
 
 `kiosk/autostart` is a working example for labwc (Wayland). It waits for the local web server before

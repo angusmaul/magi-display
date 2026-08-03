@@ -33,6 +33,32 @@ install -m 755 "$SRC/collector/magi_collect.py" "$MAGI_HOME/magi_collect.py"
 # systemd EnvironmentFile values in ways that are painful to diagnose.
 sed -i 's/\r$//' "$MAGI_HOME/display/$PAGE" "$MAGI_HOME/magi_collect.py" 2>/dev/null || true
 
+# Provenance stamp. Without this there is no way to ask a running panel where
+# its files came from — and a panel you cannot ask is a panel that quietly
+# drifts, because the safe-feeling move is always to edit it in place rather
+# than risk reinstalling over something you cannot diff. `magi-verify` reads
+# this. Records the source revision, not just a date, so "is this box current"
+# is answerable rather than a guess.
+echo "==> stamping provenance"
+_rev="unknown"; _dirty=""
+if command -v git >/dev/null 2>&1 && git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1; then
+  _rev="$(git -C "$SRC" rev-parse HEAD)"
+  # A dirty tree is worth recording loudly: it means the deployed bytes exist
+  # nowhere in history and cannot be reproduced from the revision alone.
+  git -C "$SRC" diff --quiet HEAD -- collector display 2>/dev/null || _dirty=" (dirty)"
+fi
+cat > "$MAGI_HOME/INSTALLED" <<STAMPEOF
+# Written by install.sh. Do not edit — regenerate by reinstalling.
+panel=$PANEL
+page=$PAGE
+revision=$_rev$_dirty
+installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+installed_by=$USER_NAME@$(hostname)
+source=$SRC
+STAMPEOF
+chmod 644 "$MAGI_HOME/INSTALLED"
+echo "    revision $_rev$_dirty"
+
 echo "==> installing fonts"
 mkdir -p "$HOME/.local/share/fonts/michroma"
 install -m 644 "$SRC/fonts/Michroma-Regular.ttf" "$SRC/fonts/OFL.txt" \

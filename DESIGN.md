@@ -53,11 +53,55 @@ data — the words `CURRENT` / `OPERATIONS`, and the unit names.
 | `EX_MODE` | `QUORATE` / `DEGRADED` |
 | `PRIORITY` | Worst failing tier, from the Kuma group names |
 | Lobe fill | Blue opacity tracks that node's CPU; the busiest goes solid |
+| Lobe alert line | A guest on that node whose rootfs is over `MAGI_GUEST_FS_WARN`; absent otherwise |
 
 This has a cost, and paying it was the point. The most striking field in the whole reference —
 **`TIME REMAINING TO COLLAPSE`**, counting down in the alert frame — was cut, because there is nothing
 here to count down to. Binding it to the next backup window would have been the single most
 Evangelion thing on the panel and the first lie on it.
+
+---
+
+## An alert is not a gauge
+
+Guest filesystem pressure is the one thing on the panel that is usually *nothing*, and that shape
+was chosen deliberately — it is the opposite of how the rest of the panel works.
+
+The obvious implementation is a fourth bar beside MEM/DISK/SWAP tracking the fullest guest. It would
+be honest and it would be useless: a bar sitting at 42% for eight months is one more number you stop
+seeing, and the day it reads 84% it looks exactly like the day it read 42%. So the lobe's alert line
+is set to the **empty string** when nothing is over the line. An SVG `<text>` with no content draws
+nothing at all — no placeholder, no reserved space, nothing to habituate to. Its *appearing* is the
+signal. It names the guest, because "something on this node is at 84%" is not actionable and
+"kavita is at 84%" is.
+
+Two things the placement forced, both found by looking at it rather than reasoning about it:
+
+- **The text needs a black halo** (`paint-order: stroke fill`). The lobe body is not one colour — the
+  busiest node renders solid blue, and red on solid blue collapses to a muddy maroon. Without the
+  halo the alert is least legible on the node working hardest, which is precisely the one you most
+  want to read.
+- **It cannot reuse `blip`.** That animation bottoms out at `opacity:.25`, fine for a 6px dot whose
+  only job is to move. This line carries a name and a number, and an alert you might glance at
+  mid-cycle must never be unreadable. Its own `alertpulse` floors at `.55`.
+
+It deliberately does **not** feed `crit`. A container filling its rootfs wants a human this week; the
+EMERGENCY takeover asserts the cluster is broken *now*. Promoting one into the other spends the
+takeover's credibility on a warning, which is how a red screen stops meaning anything.
+
+### Why it comes from the Proxmox API and not from a monitoring service
+
+Most clusters already have something watching disk thresholds, and reading the alert off it would be
+less code. The numbers happen to be in the `/cluster/resources` call the collector already makes, so
+sourcing them here costs nothing — but that is the cheap reason.
+
+The real one: a monitoring service usually runs *as a guest on the cluster it monitors*. A panel
+whose job is to say the cluster is in trouble must not depend on something inside the cluster to
+tell it so. Same rule that says this panel is served from the box driving the screen rather than from
+a node, and the same payoff — the failure renders instead of blanking.
+
+If you do run a monitoring system with a disk threshold, set `MAGI_GUEST_FS_WARN` to match it. Two
+tools disagreeing on screen about what counts as "too full" is worse than either alone.
 
 ---
 
