@@ -1,0 +1,141 @@
+#!/bin/sh
+# magi-verify — is what is running on the screen the same as what is in git?
+#
+#   ./bin/magi-verify [--host USER@HOST] [--home PATH] [--diff]
+#
+# Run from a checkout. Compares the files install.sh would write against the
+# files actually deployed, and reports the revision the box was installed from.
+#
+# Why this exists
+# ---------------
+# The panels are static files copied onto a box. Nothing stops anyone editing
+# them in place, and editing in place is always the tempting move: it is fast,
+# it is local, and the alternative — reinstalling over a working display — feels
+# risky precisely because you cannot see what you would be overwriting. So the
+# copy on the box slowly stops matching the copy in git, and by the time you
+# notice, neither one is obviously the truth.
+#
+# This makes that visible in one command, which is the whole intervention. The
+# rule it enforces is simple: MAGI_HOME is build output. Every change is made in
+# the checkout and installed; nothing is edited on the box. Local facts — node
+# addresses, tokens, thresholds — belong in /etc/magi/magi.env, which install.sh
+# never overwrites and this script never compares.
+#
+# Exit status: 0 in sync, 1 drifted, 2 could not check.
+set -eu
+
+SRC="$(cd "$(dirname "$0")/.." && pwd)"
+HOST=""
+HOME_DIR=""
+SHOW_DIFF=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --host) HOST="${2:?--host needs USER@HOST}"; shift 2 ;;
+    --home) HOME_DIR="${2:?--home needs a path}"; shift 2 ;;
+    --diff) SHOW_DIFF=1; shift ;;
+    -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+# Run a command locally or over ssh, so one script covers every panel.
+remote() {
+  if [ -n "$HOST" ]; then ssh -o BatchMode=yes "$HOST" "$@"; else sh -c "$*"; fi
+}
+WHERE="${HOST:-localhost}"
+
+[ -n "$HOME_DIR" ] || HOME_DIR="$(remote 'echo ${MAGI_HOME:-$HOME/magi}')"
+
+if ! remote "test -d '$HOME_DIR'" 2>/dev/null; then
+  echo "magi-verify: $WHERE has no $HOME_DIR" >&2
+  exit 2
+fi
+
+echo "== $WHERE:$HOME_DIR"
+
+# ── provenance ────────────────────────────────────────────────────────
+stamp="$(remote "cat '$HOME_DIR/INSTALLED' 2>/dev/null" || true)"
+if [ -z "$stamp" ]; then
+  # Pre-dates provenance stamping, or was never installed by install.sh at all.
+  # Either way the honest answer is "unknown", not "current".
+  echo "   revision : NOT STAMPED — installed before magi-verify existed, or copied by hand"
+  panel=""
+else
+  rev="$(printf '%s\n' "$stamp"  | sed -n 's/^revision=//p')"
+  panel="$(printf '%s\n' "$stamp" | sed -n 's/^panel=//p')"
+  when="$(printf '%s\n' "$stamp" | sed -n 's/^installed_at=//p')"
+  echo "   revision : $rev"
+  echo "   panel    : $panel   installed $when"
+  short="$(printf '%s' "$rev" | cut -c1-40)"
+  if command -v git >/dev/null 2>&1 && git -C "$SRC" cat-file -e "$short^{commit}" 2>/dev/null; then
+    head="$(git -C "$SRC" rev-parse HEAD)"
+    if [ "$short" = "$head" ]; then
+      echo "   vs HEAD  : same commit"
+    else
+      behind="$(git -C "$SRC" rev-list --count "$short..$head" 2>/dev/null || echo '?')"
+      echo "   vs HEAD  : $behind commit(s) behind $(git -C "$SRC" rev-parse --short HEAD)"
+    fi
+  fi
+fi
+
+# Fall back to whichever page is present, so an unstamped box still gets checked.
+if [ -z "$panel" ]; then
+  if remote "test -f '$HOME_DIR/display/console.html'"; then panel=console; else panel=rack; fi
+  echo "   (assuming $panel panel from the files present)"
+fi
+case "$panel" in
+  rack)    PAGE=index.html ;;
+  *)       PAGE=console.html ;;
+esac
+
+# ── content ───────────────────────────────────────────────────────────
+# CR-stripped copies of the repo files, made once and reused.
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT INT TERM
+nocr() {
+  _out="$TMP/$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+  [ -f "$_out" ] || tr -d '\r' < "$1" > "$_out"
+  printf '%s' "$_out"
+}
+
+drift=0
+check() {
+  _label="$1"; _local="$2"; _remote="$3"
+  if ! remote "test -f '$_remote'" 2>/dev/null; then
+    echo "   MISSING  $_label — not deployed"
+    drift=1
+    return
+  fi
+  # Compare content, not mtime or size: a hand-edit that happens to preserve
+  # length is exactly the kind of drift worth catching.
+  #
+  # Carriage returns are stripped from both sides first. A checkout on Windows
+  # with core.autocrlf=true has CRLF working-copy files, and install.sh already
+  # strips them on the way onto the box — so without this, verifying from a
+  # Windows checkout reports every single line of every file as drift, which
+  # would make the tool useless exactly once and then be ignored forever.
+  if remote "cat '$_remote'" | tr -d '\r' | diff -q - "$(nocr "$_local")" >/dev/null 2>&1; then
+    echo "   ok       $_label"
+  else
+    n="$(remote "cat '$_remote'" | tr -d '\r' | diff - "$(nocr "$_local")" | grep -c '^[<>]' || true)"
+    echo "   DRIFTED  $_label — $n differing line(s)"
+    drift=1
+    if [ "$SHOW_DIFF" -eq 1 ]; then
+      remote "cat '$_remote'" | tr -d '\r' | diff -u - "$(nocr "$_local")" \
+        | sed -e 's/^/     /' -e "s|$(nocr "$_local")|REPO|" || true
+    fi
+  fi
+}
+
+check "display/$PAGE"       "$SRC/display/$PAGE"            "$HOME_DIR/display/$PAGE"
+check "magi_collect.py"     "$SRC/collector/magi_collect.py" "$HOME_DIR/magi_collect.py"
+
+if [ "$drift" -eq 0 ]; then
+  echo "   -> in sync"
+else
+  echo "   -> DRIFT. Re-run with --diff to see it."
+  echo "      Deployed-side edits belong in the checkout: bring them back, commit,"
+  echo "      then ./install.sh $panel. Local facts belong in /etc/magi/magi.env."
+fi
+exit "$drift"

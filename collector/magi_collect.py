@@ -44,6 +44,12 @@ KUMA_URL   = os.environ.get("MAGI_KUMA_URL", "").rstrip("/")
 KUMA_SLUG  = os.environ.get("MAGI_KUMA_SLUG", "main")
 KUMA_BEATS = int(os.environ.get("MAGI_KUMA_BEATS", "48"))
 
+# Kuma's four heartbeat states, carried through to the panel intact. Collapsing
+# them to a boolean here is what made a monitor that is merely RETRYING
+# indistinguishable from one that is actually dead — and, because `priority`
+# below is derived from the same flag, a p1 retry lit the EMERGENCY takeover.
+K_DOWN, K_UP, K_PENDING, K_MAINT = 0, 1, 2, 3
+
 # If your Kuma groups are named for priority tiers ("p1 — critical", "p2 — …"),
 # they map straight through to the PRIORITY field rather than needing a
 # threshold invented for the panel. Anything untiered scores B.
@@ -63,6 +69,11 @@ def tier_of(name):
 # changes on the order of hours, and re-reading it every 5 s would be the one
 # genuinely wasteful call in this collector.
 TASK_INTERVAL = int(os.environ.get("MAGI_TASK_INTERVAL", "60"))
+
+# Guest rootfs warning line, in percent. If you also run a monitoring system
+# with a disk threshold, set this to the same number: two tools disagreeing
+# about what counts as "too full" is worse on a wall panel than either alone.
+GUEST_FS_WARN = float(os.environ.get("MAGI_GUEST_FS_WARN", "80"))
 _task_cache = {"at": 0.0, "value": None}
 
 
@@ -121,16 +132,23 @@ def collect_kuma():
             mid = str(mon["id"])
             beats = beats_by_id.get(mid) or []
             last = beats[-1] if beats else None
+            # None, not a status, when the page carried no beat for this
+            # monitor: "we have no reading" is a third claim, and it is neither
+            # an outage nor an all-clear. The panel renders it as 不 明.
+            status = last.get("status") if last else None
             services.append({
                 "id": mon["id"],
                 "name": mon["name"],
                 "tier": tier_of(mon["name"]),
-                "up": bool(last and last.get("status") == 1),
+                "status": status,
+                # Retained so an un-redeployed panel still renders: 1/0 is a
+                # valid subset of the status vocabulary, so old and new agree
+                # on the two states an old panel knows about.
+                "up": status == K_UP,
                 "ping": (last or {}).get("ping"),
                 "up24": uptime_by_id.get(mid + "_24"),
                 # oldest first, trimmed to what the panel actually draws
-                "beats": [1 if b.get("status") == 1 else 0
-                          for b in beats[-KUMA_BEATS:]],
+                "beats": [b.get("status") for b in beats[-KUMA_BEATS:]],
             })
     return services
 
@@ -217,6 +235,49 @@ def collect(cfg, ctx):
             if g.get("type") == "lxc" and g.get("status") == "running"
         )
 
+        # Guest filesystem pressure, per node. A container quietly filling its
+        # own rootfs is one of the few failures that is both slow enough to
+        # catch and bad enough to matter — and it rarely presents as a disk
+        # problem. A full rootfs can break the DHCP client's lease file, so the
+        # guest loses its reservation and the whole thing reads as a networking
+        # fault instead.
+        #
+        # These numbers come out of the /cluster/resources call above, which the
+        # collector already makes, so this costs no extra request. That is the
+        # cheap reason to source it here. The real reason is that a monitoring
+        # service usually runs *as a guest on the cluster it monitors*, and a
+        # panel whose job is to say the cluster is in trouble must not depend on
+        # something inside the cluster to tell it so — the same rule that says
+        # this panel is served from the box driving the screen, not from a node.
+        #
+        # `worst` is emitted whether or not anything is over the line: it is the
+        # useful number for a trend, and costs nothing. `over` is what the panel
+        # renders, and stays empty almost always.
+        fs = {}
+        for g in guests:
+            if g.get("type") != "lxc" or g.get("status") != "running":
+                continue
+            e = fs.setdefault(g.get("node"),
+                              {"total": 0, "unsized": 0, "worst": None, "over": []})
+            maxd = g.get("maxdisk") or 0
+            if not maxd:
+                # A guest reporting no size is not a guest at 0%. Count it
+                # separately rather than letting it read as healthy — VMs
+                # without a guest agent land here.
+                e["unsized"] += 1
+                continue
+            pct = round(g.get("disk", 0) / maxd * 100, 1)
+            entry = {"name": g.get("name"), "pct": pct}
+            e["total"] += 1
+            if e["worst"] is None or pct > e["worst"]["pct"]:
+                e["worst"] = entry
+            if pct >= GUEST_FS_WARN:
+                e["over"].append(entry)
+        for e in fs.values():
+            e["over"].sort(key=lambda x: -x["pct"])
+        payload["guestFs"] = fs
+        payload["guestFsWarn"] = GUEST_FS_WARN
+
         # Quorum. /cluster/status is the ONLY endpoint that reports it, and it
         # reports it as a bare flag: there are no vote counts and the QDevice
         # is not listed (verified against the live cluster). So the panel says
@@ -244,9 +305,28 @@ def collect(cfg, ctx):
     if KUMA_URL:
         try:
             services = payload["services"] = collect_kuma()
-            payload["checksTotal"] = len(services)
-            payload["checksUp"] = sum(1 for s in services if s["up"])
-            down = [s for s in services if not s["up"]]
+
+            # A monitor inside a maintenance window is neither passing nor
+            # failing — it is not being checked at all, so it leaves the
+            # denominator rather than sitting in it as a shortfall. Carrying it
+            # would show CHECKS 6/7 for the length of the window and teach the
+            # eye that a non-full pair is normal, which costs the pair its only
+            # job. CHECKS still dips for a retry: pending is not confirmed up.
+            counted = [s for s in services if s["status"] != K_MAINT]
+            payload["checksTotal"] = len(counted)
+            payload["checksUp"] = sum(1 for s in counted
+                                      if s["status"] == K_UP)
+
+            # PENDING deliberately does NOT feed incidents or priority, and so
+            # cannot reach `crit`. The children hold the retries — p1 sits at
+            # maxretries=16 — so a group stays PENDING for precisely as long as
+            # the flap it was configured to absorb. Since p1 maps to tier S+ and
+            # the panel takes `priority === "S+"` as EMERGENCY, escalating on a
+            # retry spent the takeover on a warning for up to a quarter of an
+            # hour. Same trap the guest-filesystem alert is written to avoid:
+            # promote a warning into an emergency and the red screen stops
+            # meaning anything. Only a confirmed DOWN counts.
+            down = [s for s in services if s["status"] == K_DOWN]
             payload["incidents"] = len(down)
             payload["priority"] = (
                 min((s["tier"] for s in down), key=lambda t: _TIER_ORDER[t])

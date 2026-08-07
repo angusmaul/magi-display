@@ -81,9 +81,42 @@ dropping privileges, so the service user can never read the secret off disk).
 | `MAGI_EXTRA` | `0` | Console panel: guest counts + quorum. 2 extra calls per tick |
 | `MAGI_KUMA_URL` | *(unset)* | Console panel: Uptime Kuma base URL. Unset disables the section |
 | `MAGI_KUMA_SLUG` | `main` | Status page slug |
+| `MAGI_GUEST_FS_WARN` | `80` | Percent at which a guest's rootfs is called out on its node's lobe |
 
 Node names are the one thing not in the env file — edit the `UNITS` array at the top of the
-`<script>` block in the page.
+`<script>` block in the page. **This is a wart, not a design**: it is configuration living in code,
+in the one file `install.sh` overwrites, so a reinstall silently reverts your node names. Until it
+moves into the env file, re-run `bin/magi-verify` after every install (see below) — it will show you
+exactly that edit coming back as drift.
+
+## Keeping a deployed panel honest
+
+The panels are static files copied onto a box, and nothing stops anyone editing them in place. Doing
+so is always the tempting move — fast, local, and safer-feeling than reinstalling over a working
+display when you cannot see what you would be overwriting. That is how a screen ends up running code
+that exists nowhere in git.
+
+Two things make that visible rather than inevitable:
+
+**`install.sh` stamps provenance.** It writes `$MAGI_HOME/INSTALLED` recording the commit the files
+came from, whether the tree was dirty at the time, and when. A dirty tree is recorded loudly, because
+it means the deployed bytes cannot be reproduced from the revision alone.
+
+**`bin/magi-verify` compares a box against the checkout.**
+
+```bash
+./bin/magi-verify --host tim@panel-box --diff
+```
+
+It reports the installed revision, how far behind `HEAD` that is, and any file whose *content*
+differs — not size or mtime, since a hand-edit that preserves length is exactly the drift worth
+catching. Exit status is `1` on drift, so it fits in a cron job or a pre-release check.
+
+The rule both of them enforce:
+
+> **`MAGI_HOME` is build output.** Changes are made in the checkout and installed. Local facts — host
+> addresses, tokens, thresholds — go in `/etc/magi/magi.env`, which `install.sh` never overwrites and
+> `magi-verify` never compares.
 
 ### Unattended / kiosk
 
