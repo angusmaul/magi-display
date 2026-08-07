@@ -19,7 +19,15 @@
      BLUE    the MAGI unit bodies themselves — fill intensity = load
      GREEN   accent rules and the nominal verdict
    Red is reserved: it appears only when something is actually wrong, so
-   a red screen is never decorative.                                      */
+   a red screen is never decorative.
+
+   VIOLET joined on 2026-08-07 as a fourth role, and only for Kuma's PENDING —
+   a check that is retrying and has not ruled yet. It needed a hue of its own
+   because the alternative was drawing a retry in red, which is the same
+   mistake as promoting a disk warning into the takeover. Yellow was the
+   obvious pick and the wrong one: it sits 23° from the frame orange and
+   reads as brighter chrome rather than as a state. Violet sits in the only
+   gap the palette had left, between blue and red.                        */
 :root{
   --o:#ff6a00;          --o-hi:#ff9440;      --o-dim:#a34300;
   --o-ghost:#4a2000;    --o-line:rgba(255,106,0,.38);
@@ -27,6 +35,7 @@
   --blue-ink:#050b22;
   --green:#00e567;      --green-dim:#0a7a3a;
   --red:#ff1a1a;        --red-dim:#7a0000;
+  --violet:#b44cff;     --violet-dim:#7a3ca8;
   --bg:#000;
   /* Canvas and inline-style colours can't read a CSS var directly, so the few
      that are set from JS are declared here and looked up per render. That way
@@ -46,6 +55,10 @@ body.crit{
   --o-ghost:#4a0000;     --o-line:rgba(255,26,26,.38);
   --blue:#8a0000;        --blue-hi:var(--red);--blue-dark:#1a0000;
   --green:var(--red);
+  /* Violet re-points too, or a retrying check keeps its own colour on a screen
+     that is otherwise asserting an emergency — the exact "stubbornly blue"
+     failure the note above describes, in a different hue. */
+  --violet:var(--red);   --violet-dim:var(--red-dim);
   --unit-live-rgb:138,0,0;     --trace-rgb:255,90,90;     --trace-hi:#ffd6d6;
   --frame-rgb:255,26,26;       --hot-ink:#ffd6d6;         --hot-ink-dim:#ff9b9b;
 }
@@ -301,11 +314,27 @@ header{position:absolute;top:0;left:0;right:0;height:58px;z-index:20;
   box-shadow:0 0 12px rgba(0,229,103,.55)}
 .svc.down .svc-dot{background:var(--red);box-shadow:0 0 14px rgba(255,26,26,.7);
   animation:blip .8s steps(1) infinite}
+/* PENDING gets alertpulse, not blip. blip is 0.8s steps(1) flooring at .25 — a
+   hard on/off flash, and that is the alarm. alertpulse already exists for the
+   role "elevated, but the cluster is not broken", which is exactly what a
+   retry is; giving pending its own hard flash would put two alarms on one
+   screen and leave neither of them meaning "down". */
+.svc.pending .svc-dot{background:var(--violet);
+  box-shadow:0 0 14px rgba(180,76,255,.6);
+  animation:alertpulse 1.8s ease-in-out infinite}
+/* Maintenance and no-reading are both inert, and take the panel's existing
+   word for inert — the same --o-ghost that draws a void lobe and a dark node
+   column. No motion: nothing here is asking to be looked at. */
+.svc.inert .svc-dot{background:var(--o-ghost);box-shadow:none}
 
 .svc-name{font-size:21px;letter-spacing:.1em;color:var(--o);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .svc.down .svc-name{color:var(--red)}
+.svc.pending .svc-name{color:var(--violet)}
+.svc.inert .svc-name{color:var(--o-ghost)}
 .svc-tier{font-size:10px;letter-spacing:.2em;color:var(--o-dim);margin-top:3px}
+.svc.pending .svc-tier{color:var(--violet-dim)}
+.svc.inert .svc-tier{color:var(--o-ghost)}
 
 /* Heartbeat strip — one bar per beat, oldest left. Uniform height with the
    colour carrying the state: bar HEIGHT scaled by ping would be noise at
@@ -313,6 +342,9 @@ header{position:absolute;top:0;left:0;right:0;height:58px;z-index:20;
 .svc-beats{display:flex;align-items:flex-end;gap:2px;height:46px}
 .svc-beats i{flex:1;height:100%;background:var(--green);opacity:.62}
 .svc-beats i.d{background:var(--red);opacity:1}
+.svc-beats i.p{background:var(--violet);opacity:1}
+/* .n covers maintenance, no-reading and the empty-list fallback alike: all
+   three are the absence of a measurement, not a measurement of absence. */
 .svc-beats i.n{background:var(--o-ghost);opacity:.5}
 
 .svc-up{font-size:19px;text-align:right;color:var(--o-hi);
@@ -321,7 +353,11 @@ header{position:absolute;top:0;left:0;right:0;height:58px;z-index:20;
 .svc-ping{font-size:19px;text-align:right;color:var(--o-dim);
   font-variant-numeric:tabular-nums}
 .svc-ping small{display:block;font-size:9px;letter-spacing:.2em;color:var(--o-dim)}
+/* Pending deliberately leaves these two alone. The 24h figure and the last
+   ping are still facts, and a retry is not a claim about either — the violet
+   dot and name already carry the state. */
 .svc.down .svc-up,.svc.down .svc-ping{color:var(--red)}
+.svc.inert .svc-up,.svc.inert .svc-ping{color:var(--o-ghost)}
 
 /* Kuma unreachable. An empty list would render as seven silent green rows, so
    this section states plainly that it cannot see, exactly like LINK LOST. */
@@ -699,6 +735,26 @@ function pickHot(cpus){
    distinct from an empty list, and it must never render as "all clear". */
 const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
+/* Kuma's four states, kept apart all the way to the row. `status` absent
+   entirely means an older collector that only ever sent a boolean — fall back
+   to it, because 1/0 is a valid subset of this vocabulary and the two states
+   such a collector knows about still land correctly. `status` present but null
+   is a different claim: the status page carried no beat for that monitor, so
+   we have no reading. That is neither an outage nor an all-clear, and it takes
+   the inert treatment under its own label rather than being guessed either
+   way. */
+const SVC_STATE = s => {
+  const v = ("status" in s) ? s.status : (s.up ? 1 : 0);
+  if(v === 1) return { cls:"",         jp:"稼 働"     };
+  if(v === 0) return { cls:" down",    jp:"停 止"     };
+  if(v === 2) return { cls:" pending", jp:"審 議 中"  };
+  if(v === 3) return { cls:" inert",   jp:"整 備 中"  };
+  return        { cls:" inert",   jp:"不 明"     };
+};
+
+/* Same vocabulary per beat. An old collector's 1/0 maps straight through. */
+const SVC_BEAT = b => b === 1 ? "" : b === 0 ? "d" : b === 2 ? "p" : "n";
+
 function renderServices(d){
   const box = $("#services");
   const dead = d.services === null || d.services === undefined;
@@ -712,17 +768,24 @@ function renderServices(d){
   }
 
   const svcs = d.services;
-  $("#svc-count").textContent = `${svcs.filter(s=>s.up).length}/${svcs.length}`;
+  /* Taken from the collector rather than recounted here. This line used to run
+     its own filter, which meant the CHECKS pair in the header and the one in
+     the ticker were two independent calculations of the same number — they
+     agreed only by luck, and stopped agreeing the moment maintenance left the
+     denominator on one side and not the other. */
+  $("#svc-count").textContent = (d.checksTotal == null)
+    ? "—" : `${d.checksUp||0}/${d.checksTotal}`;
 
   $("#svc-list").innerHTML = svcs.map(s=>{
-    const beats = (s.beats||[]).map(b=>`<i class="${b?"":"d"}"></i>`).join("")
+    const st = SVC_STATE(s);
+    const beats = (s.beats||[]).map(b=>`<i class="${SVC_BEAT(b)}"></i>`).join("")
       || '<i class="n"></i>'.repeat(48);
     const up24 = s.up24 == null ? "—" : (s.up24*100).toFixed(s.up24 >= 0.9995 ? 0 : 2)+"%";
     const ping = s.ping == null ? "—" : s.ping+"ms";
-    return `<div class="svc${s.up?"":" down"}">
+    return `<div class="svc${st.cls}">
       <div class="svc-dot"></div>
       <div><div class="svc-name">${esc(s.name)}</div>
-           <div class="svc-tier">${s.up?"稼 働":"停 止"} · ${esc(s.tier)}</div></div>
+           <div class="svc-tier">${st.jp} · ${esc(s.tier)}</div></div>
       <div class="svc-beats">${beats}</div>
       <div class="svc-up">${up24}<small>24H</small></div>
       <div class="svc-ping">${ping}<small>PING</small></div>
@@ -918,7 +981,7 @@ function tickElapsed(){
 }
 
 /* ── demo payloads ────────────────────────────────────────────────────
-   OPT-IN ONLY — `?demo` in the URL, or pressing 1–4. A wall panel
+   OPT-IN ONLY — `?demo` in the URL, or pressing 1–5. A wall panel
    must never fall back to demo data on error: the rack panel did, which
    meant a dead collector rendered a healthy cluster under a live clock.
    That is the worst failure a monitor can have, so the fallback is now
@@ -928,6 +991,12 @@ function tickElapsed(){
 const BEATS = (downAt) => Array.from({length:48},(_,i)=> downAt!=null && i>=downAt ? 0 : 1);
 const SVC = (id,name,tier,up,ping,up24,downAt) =>
   ({id,name,tier,up,ping,up24,beats:BEATS(downAt)});
+/* Carries an explicit Kuma status rather than a boolean, for the mixed-state
+   scene. Beats run nominal and then settle into that status, so the strip
+   shows the transition and not just the current colour. */
+const MIX = (id,name,tier,status,ping,up24) =>
+  ({id,name,tier,status,up:status===1,ping,up24,
+    beats:Array.from({length:48},(_,i)=> i>=40 ? status : 1)});
 const SERVICES = bad => [
   SVC(126,"Heartbeats","B",true,2,1),
   SVC(20,"Home Infra","B",true,3,0.7679),
@@ -965,6 +1034,25 @@ const DEMO = {
      lastTask:"NODE_FENCE", priority:"S+", checksUp:6, checksTotal:7, expected:2,
      nodes:[NODE("melchior",0.94,29,7.1,808870,"9.80",7.4),
             {node:"balthasar", status:"offline"}]},
+  /* 5 — the four Kuma states at once, added with violet on 2026-08-07 so the
+     pending and maintenance treatments can be read on the wall without waiting
+     for a real flap. The point of the scene is what is ABSENT: p1 is pending,
+     which used to mean tier S+ into `crit` into a full takeover, and here it
+     is a violet row with PRIORITY still "—". p3 is in a window and has left
+     the denominator, so CHECKS is 3/6 rather than 3/7. */
+  5:{cluster:"MAGI", quorate:true, guests:39, lxcRunning:38, incidents:0,
+     lastTask:"VZDUMP_OK", priority:"—", checksUp:3, checksTotal:6, expected:2,
+     services:[
+       MIX(126,"Heartbeats","B",1,2,1),
+       MIX(20,"Home Infra","B",1,3,0.9979),
+       MIX(21,"Torrentbox","B",2,null,0.9981),
+       MIX(123,"p1 — Household critical","S+",2,null,1),
+       MIX(124,"p2 — Core services","A+",1,7,0.9959),
+       MIX(125,"p3 — Background","A-",3,null,null),
+       MIX(22,"Websites","B",null,null,null),
+     ],
+     nodes:[NODE("melchior",0.22,12,6.7,808870,"0.71",3.7),
+            NODE("balthasar",0.07,4,2.1,91240,"0.24",0.4)]},
 };
 let demoKey = 1;
 let demoMode = location.search.includes("demo");
@@ -989,7 +1077,7 @@ async function poll(){
 /* 1 PROTECTED · 2 DILEMMA (checks failing) · 3 DILEMMA (node down, quorum held)
    4 EMERGENCY (quorum lost, takeover) · 0 back to live */
 addEventListener("keydown", e=>{
-  if(["1","2","3","4"].includes(e.key)){ demoMode = true; demoKey = +e.key; render(DEMO[demoKey]); }
+  if(["1","2","3","4","5"].includes(e.key)){ demoMode = true; demoKey = +e.key; render(DEMO[demoKey]); }
   if(e.key === "0"){ demoMode = false; poll(); }      /* back to live */
 });
 
