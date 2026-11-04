@@ -125,6 +125,39 @@ launching Chromium, because **Chromium does not retry a failed navigation** — 
 session can beat the server up and you get a permanent connection-refused page with nobody there to
 reload it.
 
+### Sharing the screen with another page (optional)
+
+`display/rotate.html` alternates the console panel with one other page in the same window. Point
+the browser at it instead of `console.html`:
+
+```
+rotate.html?b=<url>&ta=120&tb=45
+```
+
+`ta` and `tb` are each page's turn in seconds (defaults 120 and 45). With no `b=` it shows the
+panel alone. It is not installed by `install.sh`; copy it beside `console.html`.
+
+It keeps the panel's rules:
+
+- **The panel owns the screen while it is alarming.** If the verdict reads `EMERGENCY` or
+  `LINK LOST`, the other page's turn is skipped, and an alarm that starts during the other page's
+  turn brings the panel straight back (checked every 2 s). `DILEMMA` does not hold, because it is
+  the everyday "a check is down" state and would stop the rotation for days.
+- **A dead second page never blanks the screen.** Its URL (or `probe=<url>`) is fetched before
+  each turn, and an error status, a timeout or a refused connection skips the turn. A page that
+  hasn't loaded within 15 s isn't shown. Once it answers again it is reloaded, so a page that
+  failed at boot recovers by itself.
+- Both pages stay loaded and swap visibility, so each keeps polling its own data.
+
+The other page has to allow framing by the panel's origin. Many apps send
+`Content-Security-Policy: frame-ancestors 'none'`, which a browser cannot override; those need a
+small local proxy in front that rewrites that one directive.
+
+The probe can only read the status if the other page's server sends
+`Access-Control-Allow-Origin` for the panel's origin. Without it the probe can only tell "no
+answer" from "something answered", so an error page would count as up. A proxy should send that
+header, including on its own error responses.
+
 ---
 
 ## Design notes

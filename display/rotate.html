@@ -1,0 +1,155 @@
+<!doctype html>
+<!--
+  rotate.html: alternate the console panel with one other page, in one window.
+
+  Optional. Point the console's browser at this page instead of console.html:
+
+    rotate.html?b=<url>                      MAGI 120 s, then <url> 45 s, repeat
+    rotate.html?b=<url>&ta=90&tb=30          other dwell times, in seconds
+    rotate.html?a=console.html&b=<url>       the first page is console.html by default
+    rotate.html?b=<url>&probe=<url>          probe a different URL than b (a health path)
+
+  With no b= it shows the panel alone and never rotates, so a bad URL can only
+  ever leave you with the panel.
+
+  The rules:
+
+  1. The panel owns the screen while it is raising an alarm. If its verdict
+     reads EMERGENCY or LINK LOST, the other page's turn is skipped, and if the
+     alarm starts DURING the other page's turn, the panel comes straight back
+     (checked every ALARM_POLL_MS). A rotation must never keep the one alarm in
+     the room off the screen. DILEMMA does not hold: it is the everyday "a
+     check is down" state, and holding on it would stop the rotation for days.
+  2. The other page must answer first, with a success status. Its URL (or
+     probe=) is fetched before each turn; an error status, no answer within
+     PROBE_MS, or a refused connection skips the turn and the panel stays up.
+     The status can only be read if the other page's server allows this
+     origin (Access-Control-Allow-Origin). If it does not, the probe falls back
+     to "something answered", which cannot tell an error page from the real
+     one. Behind a proxy, have the proxy send that header.
+  3. A page that has not finished loading within LOAD_MS is not shown; its
+     turn is skipped and it is loaded again next time. A page that was down is
+     reloaded once it answers again, so one that failed at boot recovers by
+     itself.
+
+  Both pages stay loaded and swap visibility, so a turn starts instantly with
+  no reload, and each page keeps polling its own data in the background.
+
+  The other page must allow being framed by this origin (CSP frame-ancestors).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MAGI rotator</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #000;
+           opacity: 0; transition: opacity .6s; pointer-events: none; }
+  iframe.on { opacity: 1; pointer-events: auto; }
+</style>
+</head>
+<body>
+<iframe id="a" title="panel"></iframe>
+<iframe id="b" title="second page"></iframe>
+<script>
+"use strict";
+const q = new URLSearchParams(location.search);
+const A_URL = q.get("a") || "console.html";
+const B_URL = q.get("b");
+const PROBE_URL = q.get("probe") || B_URL;
+const secs = (k, d) => { const n = Number(q.get(k)); return Number.isFinite(n) && n >= 5 ? n : d; };
+const TA = secs("ta", 120) * 1000;
+const TB = secs("tb", 45) * 1000;
+const PROBE_MS = 4000;
+const LOAD_MS = 15000;
+const ALARM_POLL_MS = 2000;
+const HOLD = ["EMERGENCY", "LINK LOST"];
+
+const fa = document.getElementById("a");
+const fb = document.getElementById("b");
+fa.src = A_URL;
+fa.classList.add("on");
+
+let bLoaded = false;   // true once the second page has loaded while answering
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function show(f) {
+  fa.classList.toggle("on", f === fa);
+  fb.classList.toggle("on", f === fb);
+}
+
+// The panel is same-origin, so its verdict can be read directly. If it can't
+// be read (still loading, or a different first page), nothing holds.
+function panelAlarm() {
+  try {
+    const v = fa.contentDocument && fa.contentDocument.getElementById("verdict");
+    const t = v ? v.textContent.trim().toUpperCase() : "";
+    return HOLD.some((h) => t.startsWith(h));
+  } catch (e) {
+    return false;
+  }
+}
+
+async function fetchWithin(url, opts) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), PROBE_MS);
+  try {
+    return await fetch(url, { cache: "no-store", signal: ctl.signal, ...opts });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Up means a SUCCESS status where it can be read. A CORS read failing is
+// indistinguishable from a network error, so fall back to no-cors only to tell
+// "no answer at all" (down) from "answered, status hidden" (assumed up).
+async function bAnswers() {
+  try {
+    const r = await fetchWithin(PROBE_URL, { mode: "cors" });
+    return r.ok;
+  } catch (e) {
+    try {
+      await fetchWithin(PROBE_URL, { mode: "no-cors" });
+      return true;
+    } catch (e2) {
+      return false;
+    }
+  }
+}
+
+function loadB() {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { fb.onload = null; resolve(false); }, LOAD_MS);
+    fb.onload = () => { clearTimeout(timer); fb.onload = null; resolve(true); };
+    fb.src = B_URL;
+  });
+}
+
+// Show the second page for TB, but hand the screen back the moment the panel
+// starts alarming.
+async function bTurn() {
+  show(fb);
+  const end = Date.now() + TB;
+  while (Date.now() < end) {
+    await sleep(Math.min(ALARM_POLL_MS, end - Date.now()));
+    if (panelAlarm()) return;
+  }
+}
+
+async function cycle() {
+  for (;;) {
+    show(fa);
+    await sleep(TA);
+    if (panelAlarm()) continue;
+    if (!(await bAnswers())) { bLoaded = false; continue; }
+    if (!bLoaded) bLoaded = await loadB();     // first load, or after an outage
+    if (!bLoaded) continue;                    // too slow to load: skip, retry next time
+    if (panelAlarm()) continue;                // the alarm may have started while loading
+    await bTurn();
+  }
+}
+
+if (B_URL) cycle();
+</script>
+</body>
+</html>
