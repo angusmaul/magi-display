@@ -1,0 +1,122 @@
+<!doctype html>
+<!--
+  rotate.html: alternate the console panel with one other page, in one window.
+
+  Optional. Point the console's browser at this page instead of console.html:
+
+    rotate.html?b=<url>                      MAGI 120 s, then <url> 45 s, repeat
+    rotate.html?b=<url>&ta=90&tb=30          other dwell times, in seconds
+    rotate.html?a=console.html&b=<url>       the first page is console.html by default
+
+  With no b= it shows the panel alone and never rotates, so a bad URL can only
+  ever leave you with the panel.
+
+  Rules, in the order they are checked before each turn of the other page:
+
+  1. The panel holds the screen while it is raising an alarm. If its verdict
+     reads EMERGENCY or LINK LOST, the other page's turn is skipped. A rotation
+     must never move the one alarm in the room off the screen. DILEMMA does not
+     hold: it is the everyday "a check is down" state, and holding on it would
+     stop the rotation for days.
+  2. The other page must answer first. Its URL is probed; if nothing answers
+     within PROBE_MS, its turn is skipped and the panel stays up. A dead second
+     page can never blank the screen.
+  3. If the other page was down when it was last loaded, it is reloaded once it
+     answers again, so a page that failed at boot recovers without a restart.
+
+  Both pages stay loaded and swap visibility, so a turn starts instantly with
+  no reload, and each page keeps polling its own data in the background.
+
+  The other page must allow being framed by this origin (CSP frame-ancestors).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MAGI rotator</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #000;
+           opacity: 0; transition: opacity .6s; pointer-events: none; }
+  iframe.on { opacity: 1; pointer-events: auto; }
+</style>
+</head>
+<body>
+<iframe id="a" title="panel"></iframe>
+<iframe id="b" title="second page"></iframe>
+<script>
+"use strict";
+const q = new URLSearchParams(location.search);
+const A_URL = q.get("a") || "console.html";
+const B_URL = q.get("b");
+const secs = (k, d) => { const n = Number(q.get(k)); return Number.isFinite(n) && n >= 5 ? n : d; };
+const TA = secs("ta", 120) * 1000;
+const TB = secs("tb", 45) * 1000;
+const PROBE_MS = 4000;
+const HOLD = ["EMERGENCY", "LINK LOST"];
+
+const fa = document.getElementById("a");
+const fb = document.getElementById("b");
+fa.src = A_URL;
+fa.classList.add("on");
+
+let bLoadedWhileUp = false;
+
+function show(f) {
+  fa.classList.toggle("on", f === fa);
+  fb.classList.toggle("on", f === fb);
+}
+
+// The panel is same-origin, so its verdict can be read directly. If it can't
+// be read (still loading, or a different first page), nothing holds.
+function panelAlarm() {
+  try {
+    const v = fa.contentDocument && fa.contentDocument.getElementById("verdict");
+    const t = v ? v.textContent.trim().toUpperCase() : "";
+    return HOLD.some((h) => t.startsWith(h));
+  } catch (e) {
+    return false;
+  }
+}
+
+// An opaque no-cors response still proves something answered on that port.
+async function bAnswers() {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), PROBE_MS);
+  try {
+    await fetch(B_URL, { mode: "no-cors", cache: "no-store", signal: ctl.signal });
+    return true;
+  } catch (e) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function cycle() {
+  show(fa);
+  await new Promise((r) => setTimeout(r, TA));
+  if (!panelAlarm()) {
+    if (await bAnswers()) {
+      if (!bLoadedWhileUp) {
+        fb.src = B_URL;                    // first load, or recovery after an outage
+        bLoadedWhileUp = true;
+        await new Promise((r) => { fb.onload = r; setTimeout(r, 8000); });
+      }
+      show(fb);
+      await new Promise((r) => setTimeout(r, TB));
+    } else {
+      bLoadedWhileUp = false;              // reload it the next time it answers
+    }
+  }
+  cycle();
+}
+
+if (B_URL) {
+  bAnswers().then((up) => {
+    if (up) { fb.src = B_URL; bLoadedWhileUp = true; }
+    cycle();
+  });
+}
+</script>
+</body>
+</html>

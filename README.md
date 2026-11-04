@@ -125,6 +125,32 @@ launching Chromium, because **Chromium does not retry a failed navigation** — 
 session can beat the server up and you get a permanent connection-refused page with nobody there to
 reload it.
 
+### Sharing the screen with another page (optional)
+
+`display/rotate.html` alternates the console panel with one other page in the same window. Point
+the browser at it instead of `console.html`:
+
+```
+rotate.html?b=<url>&ta=120&tb=45
+```
+
+`ta` and `tb` are each page's turn in seconds (defaults 120 and 45). With no `b=` it shows the
+panel alone. It is not installed by `install.sh`; copy it beside `console.html`.
+
+It keeps the panel's rules:
+
+- **The panel holds the screen while it is alarming.** If the verdict reads `EMERGENCY` or
+  `LINK LOST`, the other page's turn is skipped. `DILEMMA` does not hold, because it is the
+  everyday "a check is down" state and would stop the rotation for days.
+- **A dead second page never blanks the screen.** Its URL is probed before each turn and the turn
+  is skipped if nothing answers. Once it answers again it is reloaded, so a page that failed at
+  boot recovers by itself.
+- Both pages stay loaded and swap visibility, so each keeps polling its own data.
+
+The other page has to allow framing by the panel's origin. Many apps send
+`Content-Security-Policy: frame-ancestors 'none'`, which a browser cannot override; those need a
+small local proxy in front that rewrites that one directive.
+
 ---
 
 ## Design notes
