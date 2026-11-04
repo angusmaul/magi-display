@@ -139,17 +139,24 @@ panel alone. It is not installed by `install.sh`; copy it beside `console.html`.
 
 It keeps the panel's rules:
 
-- **The panel holds the screen while it is alarming.** If the verdict reads `EMERGENCY` or
-  `LINK LOST`, the other page's turn is skipped. `DILEMMA` does not hold, because it is the
-  everyday "a check is down" state and would stop the rotation for days.
-- **A dead second page never blanks the screen.** Its URL is probed before each turn and the turn
-  is skipped if nothing answers. Once it answers again it is reloaded, so a page that failed at
-  boot recovers by itself.
+- **The panel owns the screen while it is alarming.** If the verdict reads `EMERGENCY` or
+  `LINK LOST`, the other page's turn is skipped, and an alarm that starts during the other page's
+  turn brings the panel straight back (checked every 2 s). `DILEMMA` does not hold, because it is
+  the everyday "a check is down" state and would stop the rotation for days.
+- **A dead second page never blanks the screen.** Its URL (or `probe=<url>`) is fetched before
+  each turn, and an error status, a timeout or a refused connection skips the turn. A page that
+  hasn't loaded within 15 s isn't shown. Once it answers again it is reloaded, so a page that
+  failed at boot recovers by itself.
 - Both pages stay loaded and swap visibility, so each keeps polling its own data.
 
 The other page has to allow framing by the panel's origin. Many apps send
 `Content-Security-Policy: frame-ancestors 'none'`, which a browser cannot override; those need a
 small local proxy in front that rewrites that one directive.
+
+The probe can only read the status if the other page's server sends
+`Access-Control-Allow-Origin` for the panel's origin. Without it the probe can only tell "no
+answer" from "something answered", so an error page would count as up. A proxy should send that
+header, including on its own error responses.
 
 ---
 

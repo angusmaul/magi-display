@@ -717,8 +717,8 @@ function updateTakeover(){
    required a challenger to beat the incumbent by 6 points. That hysteresis
    only ever ran in one direction: nothing took the lobe back off an incumbent
    that had since cooled, so one spike bought permanent tenure. Measured on
-   the live cluster: melchior touches 11.3% while casper sits at 4.6% — a 6.7
-   point lead, enough to win — then falls back to 2-5% and keeps the lobe for
+   the live cluster: melchior touches 11.3% while casper sits at 4.6% - a 6.7
+   point lead, enough to win - then falls back to 2-5% and keeps the lobe for
    good, because casper's steady 1-2 point lead can never reach 6. The panel
    ended up showing a solid melchior lobe directly beside its own CPU readout
    saying casper was higher. Balthasar hid the fault for months: as the LLM
@@ -727,18 +727,18 @@ function updateTakeover(){
 
    The fix smooths the input instead of ratcheting the output. HOT_WINDOW
    samples of the same history the sparkline draws is ~1 minute at the 5 s
-   poll — long enough that a spike cannot buy tenure, short enough that a node
+   poll - long enough that a spike cannot buy tenure, short enough that a node
    which gets genuinely busy is promoted while you are still stood in front of
    the panel. On a smoothed signal the per-poll flicker the old margin existed
    to suppress is already gone, so the margin drops to a tiebreaker, and it is
    now applied SYMMETRICALLY: the incumbent has to still be the leader to keep
    the lobe. */
 const HOT_MARGIN = 1.5;   /* CPU points, against the smoothed value */
-const HOT_WINDOW = 12;    /* samples — 12 × 5 s poll ≈ 1 minute */
+const HOT_WINDOW = 12;    /* samples - 12 × 5 s poll ≈ 1 minute */
 let hotHolder = null;
 
 /* Mean of the last HOT_WINDOW samples. HIST is seeded full on a node's first
-   sighting, so this is honest from the first render with no warm-up ramp —
+   sighting, so this is honest from the first render with no warm-up ramp  - 
    and it is deleted when a node goes down, so a returning node is judged on
    what it is doing now, not on what it was doing before it went away. */
 function hotMean(node){
@@ -753,7 +753,7 @@ function pickHot(cpus){
   if(!live.length) return (hotHolder = null);
   const mean = Object.fromEntries(live.map(n => [n, hotMean(n)]));
   const best = live.reduce((a,b)=> mean[b] > mean[a] ? b : a);
-  /* No incumbent, or the incumbent went offline — take the leader outright. */
+  /* No incumbent, or the incumbent went offline: take the leader outright. */
   if(hotHolder === null || !(hotHolder in cpus)) return (hotHolder = best);
   /* Otherwise the incumbent holds the lobe only while it is within HOT_MARGIN
      of the leader. An incumbent that cools off now loses it without the
